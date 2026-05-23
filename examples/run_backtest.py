@@ -51,7 +51,6 @@ STRATEGY_PARAMS: dict = {
 
 # ── EJECUCIÓN ─────────────────────────────────────────────────────────────
 INITIAL_CAPITAL = 100_000.0
-POSITION_PCT    = 0.02   # fracción del equity por trade (FixedFractionSizer)
 
 EXECUTION = dict(
     slippage_pct        = 0.001,
@@ -88,7 +87,6 @@ def estimator_factory(params: dict) -> EventDrivenEstimator:
         params           = {**STRATEGY_PARAMS, **params},
         symbol           = SYMBOL,
         initial_capital  = INITIAL_CAPITAL,
-        position_pct     = POSITION_PCT,
         **EXECUTION,
     )
 
@@ -122,7 +120,8 @@ def main() -> None:
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)
     report = engine.run(data, runner=runner)
 
-    print(report.summary())
+    print(report.metrics)
+    print(f"{len(report.equity_curves)} equity curves OOS")
 
 
 if __name__ == "__main__":

@@ -1,26 +1,21 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from queue import Queue
 
-from engine.events import MarketEvent
+import polars as pl
 
 
 class Strategy(ABC):
     """
     Interfaz abstracta para todas las estrategias.
-    Recibe datos, devuelve señales. No sabe en qué split está.
-    El motor no implementa estrategias: las orquesta.
+    Recibe historia de precios, devuelve weights. No sabe en qué split está.
     """
 
-    def __init__(self, events_queue: Queue) -> None:
-        self._events_queue = events_queue
-
     @abstractmethod
-    def on_market(self, event: MarketEvent) -> None:
-        """Procesa un MarketEvent y puede emitir SignalEvents."""
+    def get_weights(self, data: pl.DataFrame) -> dict[str, float]:
+        """
+        data: DataFrame [timestamp, close] con todas las barras hasta la actual.
+        Devuelve {symbol: weight} donde weight es fracción del equity (negativo = short).
+        Siempre incluir todos los símbolos operados; usar 0.0 para cerrar posición.
+        """
         pass
 
-    @abstractmethod
-    def reset(self) -> None:
-        """Resetea el estado interno entre splits."""
-        pass

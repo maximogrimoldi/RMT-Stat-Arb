@@ -26,7 +26,7 @@ from analysis.metrics import (
     annualized_return, block_bootstrap_sharpe, deflated_sharpe_ratio,
     max_drawdown, probabilistic_sharpe_ratio, sharpe_ratio,
 )
-from analysis.report import Severity, ValidationReport
+from analysis.report import ValidationReport
 
 
 BacktestRunner = Callable[
@@ -62,125 +62,85 @@ class CPCVEngine:
         self.paths_returns: list[pl.Series] = []
 
     def run(self, data: pl.DataFrame, runner: BacktestRunner) -> ValidationReport:
-        report = ValidationReport()
-        report.date_range    = (
-            str(data["timestamp"].min())[:10],
-            str(data["timestamp"].max())[:10],
-        )
-        report.bars_per_year = self._cfg.bars_per_year
         n, k = self._cpcv.n_groups, self._cpcv.n_test_groups
 
         if k >= n:
-            report.add(Severity.ERROR, "cpcv_k_vs_n",
-                       f"k={k} debe ser menor que N={n}.")
-            return report
+            raise ValueError(f"k={k} debe ser menor que N={n}.")
 
         phi = n_paths(n, k)
         if phi < 2:
-            report.add(Severity.ERROR, "cpcv_min_paths",
-                       f"C({n},{k}) produce phi={phi} trayectorias -- se necesitan al menos 2.")
-            return report
+            raise ValueError(f"C({n},{k}) produce phi={phi} trayectorias — se necesitan al menos 2.")
 
         groups = self._make_groups(data)
         min_group_size = min(len(g) for g in groups)
         if min_group_size < 10:
-            report.add(Severity.ERROR, "cpcv_group_size",
-                       f"Grupo más pequeño tiene {min_group_size} barras. "
-                       "Reducir N o aumentar el dataset.")
-            return report
+            raise ValueError(
+                f"Grupo más pequeño tiene {min_group_size} barras. "
+                "Reducir N o aumentar el dataset."
+            )
 
         all_combos = list(_combinations(range(n), k))
-        total_runner_calls = len(all_combos) * k
-        if total_runner_calls > 500:
-            report.add(Severity.WARNING, "cpcv_cost",
-                       f"C({n},{k})×k = {total_runner_calls} llamadas al runner. "
-                       "Considerar reducir N o k.")
 
-        # group_results[group_idx][combo] = returns
-        group_results: dict[int, dict[tuple, pl.Series]] = {
-            i: {} for i in range(n)
-        }
+        group_results: dict[int, dict[tuple, pl.Series]] = {i: {} for i in range(n)}
         for combo in all_combos:
             test_set   = set(combo)
             train_segs = self._get_train_segments(groups, test_set)
             if not train_segs:
-                report.add(Severity.WARNING, f"cpcv_empty_train_{combo}",
-                           f"Combinación {combo}: segmentos de train vacíos tras purging/embargo.")
                 continue
             for group_idx in combo:
                 rets, _ = runner(train_segs, groups[group_idx])
                 group_results[group_idx][combo] = rets
 
-        paths_returns = self._reconstruct_paths(
-            group_results, all_combos, n, phi
-        )
+        paths_returns = self._reconstruct_paths(group_results, all_combos, n, phi)
         self.paths_returns = paths_returns
-        report.oos_returns = [r.to_numpy() for r in paths_returns]
 
         if not paths_returns:
-            report.add(Severity.ERROR, "cpcv_no_paths", "No se pudieron reconstruir trayectorias.")
-            return report
+            raise RuntimeError("No se pudieron reconstruir trayectorias OOS.")
 
-        # ── métricas por trayectoria ─────────────────────────────────────────
+        # ── equity curves ────────────────────────────────────────────────────
+        equity_curves = []
+        for r in paths_returns:
+            equity = (1 + r).to_numpy().cumprod()
+            equity_curves.append(pl.DataFrame({"bar": list(range(len(equity))), "equity": equity}))
+
+        # ── métricas ─────────────────────────────────────────────────────────
         bpy     = self._cfg.bars_per_year
         sharpes = [sharpe_ratio(r, bpy) for r in paths_returns]
-        report.metrics["phi"]               = phi
-        report.metrics["sharpes_per_path"]  = sharpes
-        report.metrics["n_combos"]          = len(all_combos)
 
-        report.add(Severity.INFO, "phi",
-                   f"phi={phi} trayectorias OOS  |  C({n},{k})={len(all_combos)} combinaciones")
-        report.add(Severity.INFO, "sharpe_mean",
-                   f"Sharpe medio (phi paths): {np.mean(sharpes):.3f}")
-        report.add(Severity.INFO, "sharpe_std",
-                   f"Sharpe std  (phi paths): {np.std(sharpes):.3f}")
-        report.add(Severity.INFO, "sharpe_p5",
-                   f"Sharpe p5   (phi paths): {float(np.percentile(sharpes, 5)):.3f}")
-
-        pct_pos = sum(s > 0 for s in sharpes) / len(sharpes)
-        sev = Severity.WARNING if pct_pos < 0.60 else Severity.INFO
-        report.add(sev, "pct_positive_paths",
-                   f"Trayectorias con Sharpe > 0: {pct_pos:.0%}")
-
-        # ── métricas sobre el promedio de trayectorias ───────────────────────
         min_len     = min(len(r) for r in paths_returns)
         avg_returns = pl.Series("avg_returns", np.mean(
             np.stack([r.to_numpy()[:min_len] for r in paths_returns]), axis=0
         ))
 
-        sr_avg    = sharpe_ratio(avg_returns, bpy)
-        psr_avg   = probabilistic_sharpe_ratio(avg_returns, bars_per_year=bpy)
-        mdd_avg   = max_drawdown(avg_returns)
-        ann_r_avg = annualized_return(avg_returns, bpy)
-
-        report.metrics.update({
-            "sharpe_avg_path":       sr_avg,
-            "psr_avg_path":          psr_avg,
-            "max_drawdown":          mdd_avg,
-            "annualized_return_avg": ann_r_avg,
-        })
-        report.add(Severity.INFO, "annualized_return_avg",
-                   f"Retorno anualizado (avg path): {ann_r_avg:.2%}")
-        report.add(Severity.INFO, "sharpe_avg_path", f"Sharpe path-promedio: {sr_avg:.3f}")
-        sev = Severity.WARNING if psr_avg < 0.70 else Severity.INFO
-        report.add(sev, "psr_avg_path", f"PSR path-promedio: {psr_avg:.1%}")
-        report.add(Severity.INFO, "max_drawdown", f"Max drawdown (avg path): {mdd_avg:.2%}")
+        metrics: dict = {
+            "phi":                  phi,
+            "n_combos":             len(all_combos),
+            "sharpes_per_path":     sharpes,
+            "sharpe_mean":          float(np.mean(sharpes)),
+            "sharpe_std":           float(np.std(sharpes)),
+            "sharpe_p5":            float(np.percentile(sharpes, 5)),
+            "pct_positive_paths":   sum(s > 0 for s in sharpes) / len(sharpes),
+            "sharpe_avg_path":      sharpe_ratio(avg_returns, bpy),
+            "psr_avg_path":         probabilistic_sharpe_ratio(avg_returns, bars_per_year=bpy),
+            "max_drawdown":         max_drawdown(avg_returns),
+            "annualized_return_avg": annualized_return(avg_returns, bpy),
+        }
 
         if self._cfg.n_trials > 1:
-            dsr = deflated_sharpe_ratio(avg_returns, self._cfg.n_trials, bars_per_year=bpy)
-            report.metrics["dsr"] = dsr
-            sev = Severity.WARNING if (np.isnan(dsr) or dsr < 0.95) else Severity.INFO
-            label = f"{dsr:.1%}" if not np.isnan(dsr) else "nan"
-            report.add(sev, "dsr", f"DSR ({self._cfg.n_trials} trials): {label}")
+            metrics["dsr"] = deflated_sharpe_ratio(avg_returns, self._cfg.n_trials, bars_per_year=bpy)
 
         if self._cfg.block_bootstrap_reps > 0:
             block_len = self._cfg.alpha_halflife_bars or 20
-            boot = block_bootstrap_sharpe(avg_returns, self._cfg.block_bootstrap_reps, block_len)
-            report.metrics["bootstrap"] = boot
-            sev = Severity.WARNING if (np.isnan(boot["p5"]) or boot["p5"] < 0) else Severity.INFO
-            report.add(sev, "bootstrap_p5", f"Bootstrap p5 Sharpe: {boot['p5']:.3f}")
+            metrics["bootstrap"] = block_bootstrap_sharpe(avg_returns, self._cfg.block_bootstrap_reps, block_len)
 
-        return report
+        return ValidationReport(
+            metrics=metrics,
+            equity_curves=equity_curves,
+            date_range=(
+                str(data["timestamp"].min())[:10],
+                str(data["timestamp"].max())[:10],
+            ),
+        )
 
     # ── grupos ───────────────────────────────────────────────────────────────
 

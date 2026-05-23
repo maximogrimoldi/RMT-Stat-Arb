@@ -50,9 +50,9 @@ def test_cpcv_produces_phi_paths():
     data   = _make_data(1200)
     report = CPCVEngine(_base_config(), CPCVConfig(n_groups=6, n_test_groups=2)).run(data, _positive_runner)
 
-    assert not report.has_errors()
     assert report.metrics["phi"] == 5
     assert len(report.metrics["sharpes_per_path"]) == 5
+    assert len(report.equity_curves) == 5
 
 
 # ── tests de purging y embargo ───────────────────────────────────────────────
@@ -82,6 +82,7 @@ def test_cpcv_report_has_metrics_and_dsr_when_requested():
 
 
 def test_cpcv_fails_if_k_equals_n():
-    data   = _make_data(600)
-    report = CPCVEngine(_base_config(), CPCVConfig(n_groups=4, n_test_groups=4)).run(data, _dummy_runner)
-    assert report.has_errors()
+    import pytest
+    data = _make_data(600)
+    with pytest.raises(ValueError):
+        CPCVEngine(_base_config(), CPCVConfig(n_groups=4, n_test_groups=4)).run(data, _dummy_runner)
