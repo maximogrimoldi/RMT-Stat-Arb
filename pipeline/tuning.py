@@ -8,10 +8,10 @@ from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 import numpy as np
 import polars as pl
 
-from validation.cpcv import BacktestRunner
-from validation.config import ValidationConfig
-from validation.metrics import sharpe_ratio
-from validation.splits import build_train_segments, make_groups
+from pipeline.cpcv import BacktestRunner
+from pipeline.config import ValidationConfig
+from analysis.metrics import sharpe_ratio
+from pipeline.splits import build_train_segments, make_groups
 
 
 ParamGrid = Sequence[Mapping[str, Any]]

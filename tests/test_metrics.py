@@ -4,7 +4,7 @@ Tests de métricas estadísticas: Sharpe, PSR, block bootstrap, DSR.
 import numpy as np
 import polars as pl
 
-from validation.metrics import (
+from analysis.metrics import (
     block_bootstrap_sharpe,
     deflated_sharpe_ratio,
     expected_max_sharpe,

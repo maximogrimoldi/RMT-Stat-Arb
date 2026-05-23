@@ -192,15 +192,17 @@ Un resultado es creíble para capital real cuando se cumplen **todas**:
 ## Estructura de archivos
 
 ```
-├── validation/
+├── pipeline/
 │   ├── config.py          # ValidationConfig
 │   ├── cpcv.py            # CPCVConfig + CPCVEngine
+│   ├── splits.py          # make_groups, build_train_segments (purging/embargo)
 │   ├── tuning.py          # Grid tuning + consenso entre folds
+│   └── hamilton.py        # build_gapped_is() — series IS discontinuas con NaN gaps
+├── analysis/
 │   ├── metrics.py         # Sharpe, PSR, DSR, bootstrap, max_drawdown
 │   ├── plots.py           # plot_equity_vs_benchmark
-│   ├── hamilton.py        # build_gapped_is() — series IS discontinuas con NaN gaps
-│   ├── stress_testing.py  # Stress testing genérico sobre BacktestRunner
-│   └── report.py          # ValidationReport + plot_vs_spy()
+│   ├── report.py          # ValidationReport + plot_vs_spy()
+│   └── stress_testing.py  # Stress testing genérico sobre BacktestRunner
 ├── engine/
 │   ├── events.py
 │   ├── data_handler.py

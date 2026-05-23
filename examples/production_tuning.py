@@ -8,8 +8,8 @@ from typing import Any, Callable
 
 import polars as pl
 
-from validation.config import ValidationConfig
-from validation.tuning import tune_flat_dataset
+from pipeline.config import ValidationConfig
+from pipeline.tuning import tune_flat_dataset
 
 
 def load_dataset(path: Path) -> pl.DataFrame:

@@ -6,8 +6,8 @@ from datetime import date, timedelta
 import numpy as np
 import polars as pl
 
-from validation.config import ValidationConfig
-from validation.cpcv import CPCVConfig, CPCVEngine
+from pipeline.config import ValidationConfig
+from pipeline.cpcv import CPCVConfig, CPCVEngine
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────

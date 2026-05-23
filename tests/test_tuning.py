@@ -4,8 +4,8 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from validation.config import ValidationConfig
-from validation.tuning import (
+from pipeline.config import ValidationConfig
+from pipeline.tuning import (
     build_nested_cpcv_runner,
     consensus_params,
     tune_flat_dataset,

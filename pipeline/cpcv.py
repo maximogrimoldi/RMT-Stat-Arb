@@ -20,13 +20,13 @@ from typing import Callable
 import numpy as np
 import polars as pl
 
-from validation.config import ValidationConfig
-from validation.splits import build_train_segments, make_groups
-from validation.metrics import (
+from pipeline.config import ValidationConfig
+from pipeline.splits import build_train_segments, make_groups
+from analysis.metrics import (
     annualized_return, block_bootstrap_sharpe, deflated_sharpe_ratio,
     max_drawdown, probabilistic_sharpe_ratio, sharpe_ratio,
 )
-from validation.report import Severity, ValidationReport
+from analysis.report import Severity, ValidationReport
 
 
 BacktestRunner = Callable[

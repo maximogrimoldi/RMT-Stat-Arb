@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from validation.stress_testing import (
+from analysis.stress_testing import (
     StressScenario,
     StressTester,
     apply_pnl_drag,

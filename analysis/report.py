@@ -51,7 +51,7 @@ class ValidationReport:
         if self.date_range is None:
             raise RuntimeError("Sin rango de fechas. El DataFrame debe tener columna 'timestamp'.")
 
-        from validation.plots import plot_equity_vs_benchmark
+        from analysis.plots import plot_equity_vs_benchmark
 
         plot_equity_vs_benchmark(
             self.oos_returns,

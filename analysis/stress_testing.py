@@ -6,8 +6,8 @@ from typing import Any, Callable, Sequence
 import numpy as np
 import polars as pl
 
-from validation.cpcv import BacktestRunner
-from validation.metrics import max_drawdown, sharpe_ratio
+from pipeline.cpcv import BacktestRunner
+from analysis.metrics import max_drawdown, sharpe_ratio
 
 
 DataTransform = Callable[[pl.DataFrame], pl.DataFrame]
