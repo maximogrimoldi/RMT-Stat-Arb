@@ -22,3 +22,6 @@ class ValidationConfig:
 
     # Deflated Sharpe Ratio
     n_trials: int = 1           # combinaciones de parámetros intentadas (para DSR)
+
+    # Consenso de hiperparámetros (concept drift)
+    half_life_days: float = 365.0   # días para que un fold viejo pese la mitad; bajar a 90-180 si el régimen cambia rápido

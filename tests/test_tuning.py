@@ -6,8 +6,8 @@ import polars as pl
 
 from pipeline.config import ValidationConfig
 from pipeline.tuning import (
+    _consensus_params,
     build_nested_cpcv_runner,
-    consensus_params,
     tune_flat_dataset,
     tune_grid_on_is,
 )
@@ -51,17 +51,22 @@ def test_tune_grid_on_is_picks_best_params():
     assert len(result.candidates) == 3
 
 
-def test_consensus_params_uses_median_and_mode():
-    winners = [
-        {"strength": 1, "mode": "slow"},
-        {"strength": 3, "mode": "fast"},
-        {"strength": 5, "mode": "slow"},
-    ]
+def test_consensus_params_weighted_numeric():
+    winners = [{"strength": 1}, {"strength": 3}, {"strength": 5}]
+    weights = [0.01, 0.1, 1.0]  # fold reciente (strength=5) domina
 
-    consensus = consensus_params(winners)
+    result = _consensus_params(winners, weights)
 
-    assert consensus["strength"] == 3
-    assert consensus["mode"] == "slow"
+    assert result["strength"] > 4.0
+
+
+def test_consensus_params_weighted_categorical():
+    winners = [{"mode": "slow"}, {"mode": "slow"}, {"mode": "fast"}]
+    weights = [0.01, 0.01, 1.0]  # fold reciente (fast) domina
+
+    result = _consensus_params(winners, weights)
+
+    assert result["mode"] == "fast"
 
 
 def test_tune_flat_dataset_returns_consensus():

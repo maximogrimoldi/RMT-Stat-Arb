@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from numbers import Real
 from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
@@ -126,6 +125,48 @@ def _evaluate_grid(
     return candidates
 
 
+def _decay_weights(fold_end_dates: Sequence[Any], half_life_days: float) -> list[float]:
+    dates = list(fold_end_dates)
+    max_date = max(dates)
+    return [2.0 ** (-((max_date - d).days) / half_life_days) for d in dates]
+
+
+def _consensus_params(
+    winners: Sequence[Mapping[str, Any]],
+    weights: Sequence[float],
+) -> dict[str, Any]:
+    if not winners:
+        return {}
+
+    w_arr = np.asarray(weights, dtype=float)
+    keys = sorted({key for winner in winners for key in winner.keys()})
+    result: dict[str, Any] = {}
+
+    for key in keys:
+        idx = [i for i, winner in enumerate(winners) if key in winner]
+        values = [winners[i][key] for i in idx]
+        w_key = w_arr[idx]
+        if not values:
+            continue
+
+        if all(_is_numeric(v) for v in values):
+            v_arr = np.asarray(values, dtype=float)
+            w_norm = w_key / w_key.sum()
+            weighted_mean = float(np.dot(w_norm, v_arr))
+            if all(float(v).is_integer() for v in values):
+                result[key] = int(round(weighted_mean))
+            else:
+                result[key] = weighted_mean
+            continue
+
+        wt: dict[Any, float] = {}
+        for v, w in zip(values, w_key.tolist()):
+            wt[v] = wt.get(v, 0.0) + w
+        result[key] = max(wt, key=lambda k: wt[k])
+
+    return result
+
+
 def tune_grid_on_is(
     is_data: pl.DataFrame,
     param_grid: ParamGrid,
@@ -182,7 +223,7 @@ def tune_flat_dataset(
     """
     Tuning flat sobre el dataset completo.
     Divide la serie en bloques cronologicos, usa cada bloque como holdout
-    una vez, y agrega los winners por mediana/moda.
+    una vez, y agrega los winners ponderados por recencia (val_cfg.half_life_days).
     """
     if n_splits < 2:
         raise ValueError("n_splits debe ser >= 2.")
@@ -190,6 +231,7 @@ def tune_flat_dataset(
     groups = make_groups(data, n_splits)
     split_results: list[FoldTuningResult] = []
     winners: list[Mapping[str, Any]] = []
+    fold_end_dates: list[Any] = []
 
     for split_idx, test_part in enumerate(groups):
         if len(test_part) == 0:
@@ -214,13 +256,15 @@ def tune_flat_dataset(
             )
         )
         winners.append(best_candidate.params)
+        fold_end_dates.append(test_part["timestamp"].max())
 
     if not split_results:
         raise ValueError("No se pudieron evaluar splits validos para flat tuning.")
 
+    weights = _decay_weights(fold_end_dates, val_cfg.half_life_days)
     return TuningResult(
         fold_results=split_results,
-        consensus_params=consensus_params(winners),
+        consensus_params=_consensus_params(winners, weights),
     )
 
 
@@ -244,7 +288,7 @@ def tune_inner_is_segments(
     """
     Acto 1: tuning interno usando exclusivamente los bloques IS.
     Cada bloque se trata como una unidad cronologica y se usa purge/embargo
-    al armar los train segments del inner split.
+    al armar los train segments del inner split. Winners ponderados por recencia.
     """
     groups = _inner_blocks_from_is_segments(is_segments)
     if len(groups) < 2:
@@ -256,6 +300,7 @@ def tune_inner_is_segments(
 
     fold_results: list[FoldTuningResult] = []
     winners: list[Mapping[str, Any]] = []
+    fold_end_dates: list[Any] = []
 
     for fold_idx in range(n_inner):
         test_part = groups[fold_idx]
@@ -300,13 +345,15 @@ def tune_inner_is_segments(
             )
         )
         winners.append(best_candidate.params)
+        fold_end_dates.append(test_part["timestamp"].max())
 
     if not fold_results:
         raise ValueError("No se pudieron construir folds internos validos.")
 
+    weights = _decay_weights(fold_end_dates, val_cfg.half_life_days)
     return TuningResult(
         fold_results=fold_results,
-        consensus_params=consensus_params(winners),
+        consensus_params=_consensus_params(winners, weights),
     )
 
 
@@ -345,77 +392,3 @@ def build_nested_cpcv_runner(
             del tuning
 
     return runner
-
-
-def consensus_params(winners: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """
-    Agrega los winners por fold. Para parametros numericos usa mediana;
-    para categoricos usa moda con desempate por orden de aparicion.
-    """
-    if not winners:
-        return {}
-
-    keys = sorted({key for winner in winners for key in winner.keys()})
-    result: dict[str, Any] = {}
-
-    for key in keys:
-        values = [winner[key] for winner in winners if key in winner]
-        if not values:
-            continue
-
-        if all(_is_numeric(v) for v in values):
-            arr = np.asarray(values, dtype=float)
-            median = float(np.median(arr))
-            if all(float(v).is_integer() for v in values):
-                result[key] = int(round(median))
-            else:
-                result[key] = median
-            continue
-
-        counts = Counter(values)
-        best_count = max(counts.values())
-        chosen = None
-        for winner in winners:
-            value = winner.get(key)
-            if value is not None and counts[value] == best_count:
-                chosen = value
-                break
-        result[key] = chosen
-
-    return result
-
-
-def select_threshold_by_time_decay(
-    results: pl.DataFrame,
-    half_life_days: float,
-) -> float:
-    """
-    Selecciona el z_threshold con mayor Sharpe ponderado por decaimiento exponencial.
-
-    Alternativa a consensus_params() cuando hay Concept Drift: penaliza folds
-    antiguos con w = 2^(-Δt / H), donde Δt es la distancia en días al fold
-    más reciente y H es el half_life_days.
-
-    Espera un DataFrame con columnas: fold_end_date, z_threshold, sharpe_ratio.
-    """
-    return float(
-        results
-        .with_columns(
-            (
-                pl.lit(2.0) ** (
-                    -(pl.col("fold_end_date").max() - pl.col("fold_end_date"))
-                    .dt.total_days()
-                    .cast(pl.Float64)
-                    / half_life_days
-                )
-            ).alias("weight")
-        )
-        .group_by("z_threshold")
-        .agg(
-            (
-                (pl.col("weight") * pl.col("sharpe_ratio")).sum()
-                / pl.col("weight").sum()
-            ).alias("weighted_sharpe")
-        )
-        .top_k(1, by="weighted_sharpe")["z_threshold"][0]
-    )

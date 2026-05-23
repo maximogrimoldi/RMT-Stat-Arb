@@ -65,6 +65,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embargo-pct", type=float, default=0.01, help="Embargo porcentual.")
     parser.add_argument("--embargo-bars", type=int, default=None, help="Embargo absoluto en barras.")
     parser.add_argument("--n-trials", type=int, default=1, help="Cantidad de trials para DSR.")
+    parser.add_argument(
+        "--half-life-days",
+        type=float,
+        default=365.0,
+        help="Half-life en dias para el decaimiento por recencia (default: 365). Bajar a 90-180 si el regimen cambia rapido.",
+    )
     return parser.parse_args()
 
 
@@ -80,6 +86,7 @@ def main() -> None:
         embargo_pct=args.embargo_pct,
         embargo_bars=args.embargo_bars,
         n_trials=args.n_trials,
+        half_life_days=args.half_life_days,
     )
 
     tuning = tune_flat_dataset(
