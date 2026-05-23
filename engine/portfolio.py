@@ -1,30 +1,55 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
 from queue import Queue
 
 import polars as pl
 
 from engine.events import FillEvent, MarketEvent, OrderEvent, OrderDirection, SignalEvent
+from strategy.sizing import PositionSizer, FixedFractionSizer
 
 
-class Portfolio(ABC):
+class Portfolio:
     """
     Aplica position sizing y filtros de riesgo.
-    Transforma SignalEvents en OrderEvents. No conoce la estrategia.
+    Transforma SignalEvents en OrderEvents. No conoce la estrategia ni el sizer.
     """
 
-    def __init__(self, events_queue: Queue, initial_capital: float) -> None:
+    def __init__(self, events_queue: Queue, initial_capital: float, sizer: PositionSizer) -> None:
         self._events_queue = events_queue
         self._initial_capital = float(initial_capital)
         self._cash = float(initial_capital)
+        self._sizer = sizer
         self._positions: dict[str, float] = {}       # symbol -> cantidad de acciones
         self._latest_prices: dict[str, float] = {}   # symbol -> último close
         self._equity_curve: list[float] = []
 
-    @abstractmethod
     def on_signal(self, event: SignalEvent) -> None:
-        """Position sizing va acá. Emite OrderEvent."""
-        pass
+        price = self._latest_prices.get(event.symbol)
+        if price is None or price == 0:
+            return
+
+        if event.direction == "EXIT":
+            current = self._positions.get(event.symbol, 0)
+            if current > 0:
+                order_direction: OrderDirection = "EXIT_LONG"
+            elif current < 0:
+                order_direction = "EXIT_SHORT"
+            else:
+                return
+            quantity = abs(current)
+        else:
+            order_direction = event.direction
+            quantity = self._sizer.size(event, self.equity, price, self._positions)
+
+        if quantity <= 0:
+            return
+
+        self._events_queue.put(OrderEvent(
+            timestamp=event.timestamp,
+            symbol=event.symbol,
+            order_type="MKT",
+            quantity=quantity,
+            direction=order_direction,
+        ))
 
     def on_fill(self, event: FillEvent) -> None:
         notional = event.fill_price * event.quantity
@@ -74,37 +99,7 @@ class Portfolio(ABC):
 
 
 class SimplePortfolio(Portfolio):
-    """Position sizing fijo: position_pct del equity actual por trade."""
+    """Conveniencia: Portfolio con FixedFractionSizer. API idéntica a antes."""
 
     def __init__(self, events_queue: Queue, initial_capital: float, position_pct: float = 0.02) -> None:
-        super().__init__(events_queue, initial_capital)
-        self._position_pct = position_pct
-
-    def on_signal(self, event: SignalEvent) -> None:
-        price = self._latest_prices.get(event.symbol)
-        if price is None or price == 0:
-            return
-
-        if event.direction == "EXIT":
-            current = self._positions.get(event.symbol, 0)
-            if current > 0:
-                order_direction: OrderDirection = "EXIT_LONG"
-            elif current < 0:
-                order_direction = "EXIT_SHORT"
-            else:
-                return
-            quantity = abs(current)
-        else:
-            order_direction = event.direction
-            quantity = (self.equity * self._position_pct) / price
-
-        if quantity <= 0:
-            return
-
-        self._events_queue.put(OrderEvent(
-            timestamp=event.timestamp,
-            symbol=event.symbol,
-            order_type="MKT",
-            quantity=quantity,
-            direction=order_direction,
-        ))
+        super().__init__(events_queue, initial_capital, sizer=FixedFractionSizer(position_pct))

@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backtester — Arquitectura y Workflow</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f0f2f5;
+  color: #1a1a2e;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* ── NAV ── */
+nav {
+  position: sticky; top: 0; z-index: 200;
+  background: #0d0d1a;
+  border-bottom: 2px solid #4cc9f0;
+  padding: 0 32px;
+  display: flex; align-items: center; gap: 4px;
+  height: 52px;
+}
+nav .brand { color: #4cc9f0; font-weight: 700; font-size: 16px; margin-right: 24px; white-space: nowrap; }
+nav a {
+  color: #aab; text-decoration: none; font-size: 13px; font-weight: 500;
+  padding: 6px 14px; border-radius: 6px; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+nav a:hover { background: #1e1e3a; color: #4cc9f0; }
+
+/* ── LAYOUT ── */
+.page { max-width: 1120px; margin: 0 auto; padding: 40px 28px 80px; }
+
+section { margin-bottom: 72px; scroll-margin-top: 68px; }
+
+h1 { font-size: 32px; font-weight: 800; margin-bottom: 6px; color: #0d0d1a; }
+.subtitle { color: #666; font-size: 16px; margin-bottom: 36px; }
+h2 {
+  font-size: 22px; font-weight: 700; margin-bottom: 18px;
+  padding-bottom: 10px; border-bottom: 3px solid #4cc9f0; color: #0d0d1a;
+}
+h3 { font-size: 16px; font-weight: 700; margin: 24px 0 10px; color: #333; }
+p { margin-bottom: 12px; color: #333; }
+
+/* ── CARDS ── */
+.card {
+  background: white; border-radius: 10px;
+  padding: 22px 24px; margin-bottom: 20px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+}
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 20px 0;
+}
+.component-card {
+  background: white; border-radius: 10px; padding: 18px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+  border-top: 4px solid;
+}
+.c-data     { border-color: #4361ee; }
+.c-strategy { border-color: #2dc653; }
+.c-portfolio{ border-color: #f77f00; }
+.c-exec     { border-color: #e63946; }
+.c-val      { border-color: #8338ec; }
+
+.card-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+.io-section { margin-top: 10px; }
+.io-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: #888; margin-bottom: 5px;
+}
+.io-item {
+  background: #f5f6f8; border-radius: 5px;
+  padding: 4px 10px; margin-bottom: 4px;
+  font-family: 'Menlo', 'Consolas', monospace; font-size: 12px; color: #333;
+}
+
+/* ── BADGES ── */
+.badge {
+  display: inline-block; padding: 2px 9px; border-radius: 20px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.3px;
+}
+.b-market   { background: #dbeafe; color: #1d4ed8; }
+.b-signal   { background: #dcfce7; color: #15803d; }
+.b-order    { background: #fff7ed; color: #c2410c; }
+.b-fill     { background: #fce7f3; color: #9d174d; }
+.b-runner   { background: #ede9fe; color: #6d28d9; }
+
+/* ── FLOW STRIP ── */
+.flow {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 0; margin: 24px 0; background: white;
+  border-radius: 10px; padding: 20px 24px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+}
+.flow-node {
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center;
+}
+.flow-box {
+  padding: 10px 16px; border-radius: 8px; font-size: 13px;
+  font-weight: 700; border: 2px solid; white-space: nowrap;
+}
+.flow-sub { font-size: 10px; color: #888; margin-top: 4px; max-width: 100px; }
+.flow-arrow { font-size: 22px; color: #bbb; padding: 0 6px; margin-bottom: 14px; }
+.flow-label {
+  font-size: 10px; color: #999; text-align: center;
+  max-width: 70px; word-break: break-word; margin-top: 4px;
+}
+
+/* ── CODE ── */
+pre {
+  background: #1e1e2e; color: #cdd6f4;
+  border-radius: 8px; padding: 20px 22px;
+  overflow-x: auto; font-size: 13px; line-height: 1.55;
+  margin: 16px 0;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+}
+code { font-family: 'Menlo', 'JetBrains Mono', 'Consolas', monospace; }
+.kw   { color: #cba6f7; }
+.fn   { color: #89b4fa; }
+.str  { color: #a6e3a1; }
+.cm   { color: #585b70; font-style: italic; }
+.nb   { color: #fab387; }
+.cls  { color: #f38ba8; }
+.num  { color: #f9e2af; }
+.dec  { color: #89dceb; }
+.op   { color: #89b4fa; }
+
+/* ── TRACE TABLE ── */
+.trace-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+  background: white; border-radius: 10px; overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+  margin: 16px 0;
+}
+.trace-table th {
+  background: #0d0d1a; color: white;
+  padding: 11px 16px; text-align: left; font-size: 12px;
+  font-weight: 600; letter-spacing: 0.3px;
+}
+.trace-table td { padding: 11px 16px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
+.trace-table tr:last-child td { border-bottom: none; }
+.trace-table tr:hover td { background: #f8f9ff; }
+.mono { font-family: 'Menlo', 'Consolas', monospace; font-size: 12px; }
+
+/* ── CALLOUT ── */
+.callout {
+  border-left: 4px solid; border-radius: 0 8px 8px 0;
+  padding: 12px 16px; margin: 16px 0; font-size: 14px;
+}
+.callout-info  { border-color: #4cc9f0; background: #e8f8ff; }
+.callout-warn  { border-color: #f77f00; background: #fff3e8; }
+.callout-ok    { border-color: #2dc653; background: #eafff0; }
+.callout-key   { border-color: #8338ec; background: #f3eeff; }
+
+.callout strong { font-weight: 700; }
+
+/* ── MERMAID ── */
+.mermaid-wrap {
+  background: white; border-radius: 10px;
+  padding: 24px; margin: 20px 0;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+  overflow-x: auto;
+}
+.mermaid { display: flex; justify-content: center; }
+
+/* ── PILLAR LIST ── */
+.pillar-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 20px 0; }
+.pillar {
+  background: white; border-radius: 10px; padding: 18px 20px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+}
+.pillar-num { font-size: 28px; font-weight: 800; color: #4cc9f0; line-height: 1; margin-bottom: 6px; }
+.pillar-title { font-weight: 700; font-size: 15px; margin-bottom: 6px; }
+.pillar-desc { font-size: 13px; color: #555; }
+
+/* ── TAG ── */
+.tag {
+  display: inline-block; background: #e8f0ff; color: #3555cc;
+  border-radius: 5px; padding: 2px 8px; font-size: 12px; font-weight: 600;
+  font-family: monospace; margin: 2px;
+}
+
+/* ── DIVIDER ── */
+.divider { border: none; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+
+/* ── 2-col ── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="brand">⚡ Backtester</span>
+  <a href="#overview">Overview</a>
+  <a href="#engine">Engine Loop</a>
+  <a href="#mean-reversion">Mean Reversion</a>
+  <a href="#cpcv">CPCV Pipeline</a>
+  <a href="#trace">Trace completo</a>
+  <a href="#code">Código mínimo</a>
+</nav>
+
+<div class="page">
+
+<!-- ══════════════════════════════════════════════════════
+     OVERVIEW
+     ══════════════════════════════════════════════════════ -->
+<section id="overview">
+  <h1>Backtester — Arquitectura y Workflow</h1>
+  <p class="subtitle">Cómo se interconectan todos los componentes, qué entra y qué sale de cada uno, y cómo enchufar una estrategia mean-reverting.</p>
+
+  <div class="callout callout-key">
+    <strong>Principio rector:</strong> el motor no implementa estrategias, las orquesta. El único punto de extensión es el <span class="tag">BacktestRunner</span> o el <span class="tag">FitPredictEstimator</span>. Todo lo demás —purging, embargo, splits, métricas, paths— lo maneja el framework.
+  </div>
+
+  <!-- STACK OVERVIEW FLOW -->
+  <div class="flow">
+    <div class="flow-node">
+      <div class="flow-box" style="border-color:#4361ee;color:#4361ee;">DataFrame</div>
+      <div class="flow-sub">timestamp, open, close, features</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-box" style="border-color:#8338ec;color:#8338ec;">CPCVEngine</div>
+      <div class="flow-sub">splits N grupos C(N,k) combos</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-box" style="border-color:#8338ec;color:#8338ec;">BacktestRunner</div>
+      <div class="flow-sub">is_segments + oos_data</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-box" style="border-color:#f77f00;color:#f77f00;">Estimator.fit(IS)</div>
+      <div class="flow-sub">parámetros congelados</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-box" style="border-color:#2dc653;color:#2dc653;">Estimator.predict(OOS)</div>
+      <div class="flow-sub">corre EventLoop internamente</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-box" style="border-color:#e63946;color:#e63946;">(returns, signals)</div>
+      <div class="flow-sub">pl.Series OOS</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-box" style="border-color:#4cc9f0;color:#0d8fa8;">ValidationReport</div>
+      <div class="flow-sub">Sharpe, PSR, DSR, paths</div>
+    </div>
+  </div>
+
+  <!-- COMPONENT CARDS -->
+  <div class="card-grid">
+    <div class="component-card c-data">
+      <div class="card-title">📡 DataHandler</div>
+      <div style="font-size:13px;color:#555;">Guardián del tiempo. Cursor estricto: imposible pedir datos del futuro.</div>
+      <div class="io-section">
+        <div class="io-label">recibe</div>
+        <div class="io-item">pl.DataFrame (timestamp, open, close)</div>
+        <div class="io-label">emite</div>
+        <div class="io-item">MarketEvent → Queue</div>
+      </div>
+    </div>
+    <div class="component-card c-strategy">
+      <div class="card-title">🧠 Strategy</div>
+      <div style="font-size:13px;color:#555;">Lógica pura. Ve close del bar t. Emite señales. No sabe en qué fold está.</div>
+      <div class="io-section">
+        <div class="io-label">recibe</div>
+        <div class="io-item">MarketEvent (de la Queue)</div>
+        <div class="io-label">emite</div>
+        <div class="io-item">SignalEvent(direction, strength) → Queue</div>
+      </div>
+    </div>
+    <div class="component-card c-portfolio">
+      <div class="card-title">💼 Portfolio</div>
+      <div style="font-size:13px;color:#555;">Position sizing y contabilidad. Transforma señales en órdenes. No conoce la estrategia.</div>
+      <div class="io-section">
+        <div class="io-label">recibe</div>
+        <div class="io-item">SignalEvent + FillEvent + MarketEvent</div>
+        <div class="io-label">emite</div>
+        <div class="io-item">OrderEvent → Queue</div>
+        <div class="io-label">expone</div>
+        <div class="io-item">returns_series (pct_change equity)</div>
+      </div>
+    </div>
+    <div class="component-card c-exec">
+      <div class="card-title">⚡ ExecutionHandler</div>
+      <div style="font-size:13px;color:#555;">Simula ejecución al open del bar siguiente con slippage y comisiones.</div>
+      <div class="io-section">
+        <div class="io-label">recibe</div>
+        <div class="io-item">OrderEvent (guarda en _pending)</div>
+        <div class="io-label">emite (próximo bar)</div>
+        <div class="io-item">FillEvent(fill_price, commission, slippage)</div>
+      </div>
+    </div>
+    <div class="component-card c-val">
+      <div class="card-title">🔬 CPCVEngine</div>
+      <div style="font-size:13px;color:#555;">Orquesta validación estadística. Genera φ trayectorias OOS independientes.</div>
+      <div class="io-section">
+        <div class="io-label">recibe</div>
+        <div class="io-item">data + BacktestRunner</div>
+        <div class="io-label">retorna</div>
+        <div class="io-item">ValidationReport (Sharpe, PSR, DSR, paths)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     ENGINE LOOP
+     ══════════════════════════════════════════════════════ -->
+<section id="engine">
+  <h2>🔄 Engine Event Loop — ejecución barra por barra</h2>
+
+  <p>Por cada barra, el <span class="tag">EventLoop</span> ejecuta exactamente esta secuencia. La clave anti-look-ahead: la señal se genera al <strong>close del bar t</strong> pero la orden se ejecuta al <strong>open del bar t+1</strong>.</p>
+
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+sequenceDiagram
+    participant DH as DataHandler
+    participant Q as Queue
+    participant EH as ExecutionHandler
+    participant S as Strategy
+    participant P as Portfolio
+
+    rect rgb(240, 248, 255)
+        Note over DH,P: ── Bar t ──────────────────────────────────────
+        DH->>Q: MarketEvent(ts_t, open_t, close_t)
+        Note over Q: EventLoop extrae el MarketEvent
+        Q->>EH: fill_pending(open_t)
+        Note over EH: Ejecuta _pending del bar t-1
+        EH->>Q: FillEvent(fill_price≈open_t, commission, slippage)
+        Q->>P: on_fill → actualiza cash y posiciones
+    end
+
+    rect rgb(240, 255, 245)
+        Note over DH,P: Estrategia ve close_t
+        Q->>S: on_market(MarketEvent)
+        S->>Q: SignalEvent(LONG/SHORT/EXIT, strength)
+        P->>P: update_market → equity_curve.append(equity)
+        Q->>P: on_signal(SignalEvent) → position sizing
+        P->>Q: OrderEvent(quantity, direction, MKT)
+        Q->>EH: on_order → agrega a _pending
+        Note over EH: La orden espera el próximo open
+    end
+
+    rect rgb(255, 248, 240)
+        Note over DH,P: ── Bar t+1 ── la orden se ejecuta acá ──────
+        DH->>Q: MarketEvent(ts_{t+1}, open_{t+1}, close_{t+1})
+        Q->>EH: fill_pending(open_{t+1})
+        EH->>Q: FillEvent(fill_price≈open_{t+1})
+    end
+    </div>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>Por qué el fill va al open siguiente:</strong> En mercados reales no podés ejecutar a exactamente el close. La señal se genera cuando el bar <em>cierra</em>; la orden entra al mercado en la <em>apertura del día siguiente</em>. Esto evita look-ahead bias en la ejecución.
+  </div>
+
+  <h3>Anatomía de cada evento</h3>
+  <table class="trace-table">
+    <thead>
+      <tr><th>Evento</th><th>Campos</th><th>Quién lo emite</th><th>Quién lo consume</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="badge b-market">MarketEvent</span></td>
+        <td class="mono">timestamp, symbol, open, close</td>
+        <td>DataHandler.update_bars()</td>
+        <td>ExecutionHandler (para fill) + Strategy (para señal) + Portfolio (para equity)</td>
+      </tr>
+      <tr>
+        <td><span class="badge b-signal">SignalEvent</span></td>
+        <td class="mono">timestamp, symbol, direction, strength[-1,1]</td>
+        <td>Strategy.on_market()</td>
+        <td>Portfolio.on_signal() → calcula quantity</td>
+      </tr>
+      <tr>
+        <td><span class="badge b-order">OrderEvent</span></td>
+        <td class="mono">timestamp, symbol, order_type, quantity, direction</td>
+        <td>Portfolio.on_signal()</td>
+        <td>ExecutionHandler.on_order() → guarda en _pending</td>
+      </tr>
+      <tr>
+        <td><span class="badge b-fill">FillEvent</span></td>
+        <td class="mono">timestamp, symbol, direction, quantity, fill_price, commission, slippage</td>
+        <td>ExecutionHandler.fill_pending()</td>
+        <td>Portfolio.on_fill() → actualiza cash + posiciones</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Cómo SimplePortfolio calcula la cantidad</h3>
+  <div class="card">
+    <p>Cuando recibe un <span class="badge b-signal">SignalEvent</span>:</p>
+    <pre><code><span class="cm"># direction = "LONG" o "SHORT"</span>
+quantity = (self.equity * <span class="num">0.02</span>) / price
+<span class="cm"># equity = cash + suma(posición × último_precio)</span>
+<span class="cm"># position_pct = 0.02 → apuesta el 2% del equity por trade</span>
+
+<span class="cm"># direction = "EXIT" → cierra toda la posición abierta</span>
+quantity = abs(self._positions[symbol])</code></pre>
+    <p style="font-size:13px;color:#555;">Configurás <span class="tag">position_pct</span> al instanciar <code>SimplePortfolio</code>. Podés implementar tu propio <code>Portfolio</code> con Kelly, volatility targeting, etc.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     MEAN REVERSION
+     ══════════════════════════════════════════════════════ -->
+<section id="mean-reversion">
+  <h2>📐 Mean Reversion — implementación completa</h2>
+
+  <p>Una estrategia mean-reverting necesita <strong>dos capas</strong>: la lógica de señal (<code>Strategy</code>) y el wrapper de fit/predict (<code>FitPredictEstimator</code>) que conecta con el pipeline de validación.</p>
+
+  <div class="pillar-grid">
+    <div class="pillar">
+      <div class="pillar-num">1</div>
+      <div class="pillar-title">Parámetros (la grilla)</div>
+      <div class="pillar-desc"><code>window</code>: barras de lookback del z-score. <code>entry_z</code>: umbral para entrar. <code>exit_z</code>: umbral para salir. El tuner elige la combinación óptima.</div>
+    </div>
+    <div class="pillar">
+      <div class="pillar-num">2</div>
+      <div class="pillar-title">fit(IS)</div>
+      <div class="pillar-desc">Calcula media y std del IS. Congela esos parámetros. El OOS nunca toca esta estimación → sin look-ahead bias estadístico.</div>
+    </div>
+    <div class="pillar">
+      <div class="pillar-num">3</div>
+      <div class="pillar-title">on_market(bar)</div>
+      <div class="pillar-desc">Calcula z-score usando los parámetros del IS. Si z cruza entry_z → emite LONG/SHORT. Si vuelve a exit_z → emite EXIT.</div>
+    </div>
+    <div class="pillar">
+      <div class="pillar-num">4</div>
+      <div class="pillar-title">predict(OOS)</div>
+      <div class="pillar-desc">Instancia el EventLoop completo con la estrategia ya hidratada. Corre el loop. Retorna (returns_series, signals_series).</div>
+    </div>
+  </div>
+
+  <h3>Archivo: <code>strategy/mean_reversion.py</code></h3>
+  <pre><code><span class="kw">from</span> __future__ <span class="kw">import</span> annotations
+<span class="kw">from</span> queue <span class="kw">import</span> Queue
+<span class="kw">import</span> polars <span class="kw">as</span> pl
+<span class="kw">from</span> engine.events <span class="kw">import</span> MarketEvent, SignalEvent
+<span class="kw">from</span> strategy.base <span class="kw">import</span> Strategy
+
+
+<span class="kw">class</span> <span class="cls">MeanReversionStrategy</span>(Strategy):
+    <span class="cm">"""
+    Emite LONG cuando z < -entry_z (precio muy bajo → espera reversión al alza).
+    Emite SHORT cuando z > entry_z  (precio muy alto → espera caída).
+    Emite EXIT cuando |z| < exit_z  (precio volvió al rango normal).
+
+    IMPORTANTE: mean y std se reciben del IS. La estrategia nunca los recalcula
+    con datos del OOS. Así no hay look-ahead bias estadístico.
+    """</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(
+        self,
+        events_queue: Queue,
+        mean: <span class="nb">float</span>,
+        std: <span class="nb">float</span>,
+        entry_z: <span class="nb">float</span> = <span class="num">2.0</span>,
+        exit_z:  <span class="nb">float</span> = <span class="num">0.5</span>,
+    ) -> <span class="kw">None</span>:
+        <span class="nb">super</span>().__init__(events_queue)
+        self._mean    = mean
+        self._std     = std
+        self._entry_z = entry_z
+        self._exit_z  = exit_z
+        self._position: <span class="nb">float</span> = <span class="num">0.0</span>  <span class="cm"># +1 long, -1 short, 0 flat</span>
+        self._signals:  <span class="nb">list</span>[<span class="nb">float</span>] = []
+
+    <span class="kw">def</span> <span class="fn">on_market</span>(self, event: MarketEvent) -> <span class="kw">None</span>:
+        <span class="kw">if</span> self._std == <span class="num">0</span>:
+            self._signals.append(<span class="num">0.0</span>)
+            <span class="kw">return</span>
+
+        z = (event.close - self._mean) / self._std  <span class="cm"># z-score con params del IS</span>
+
+        <span class="kw">if</span> self._position == <span class="num">0</span>:
+            <span class="kw">if</span> z < -self._entry_z:
+                self._emit(event, <span class="str">"LONG"</span>,  -z)    <span class="cm"># precio bajo → compramos</span>
+                self._position = <span class="num">1.0</span>
+            <span class="kw">elif</span> z > self._entry_z:
+                self._emit(event, <span class="str">"SHORT"</span>,  z)    <span class="cm"># precio alto → vendemos</span>
+                self._position = -<span class="num">1.0</span>
+            <span class="kw">else</span>:
+                self._signals.append(<span class="num">0.0</span>)
+
+        <span class="kw">elif</span> abs(z) < self._exit_z:
+            self._emit(event, <span class="str">"EXIT"</span>, <span class="num">0.0</span>)      <span class="cm"># precio normalizó → salimos</span>
+            self._position = <span class="num">0.0</span>
+        <span class="kw">else</span>:
+            self._signals.append(self._position)   <span class="cm"># mantenemos posición</span>
+
+    <span class="kw">def</span> <span class="fn">_emit</span>(self, event: MarketEvent, direction: <span class="nb">str</span>, strength: <span class="nb">float</span>) -> <span class="kw">None</span>:
+        self._events_queue.put(SignalEvent(
+            timestamp=event.timestamp,
+            symbol=event.symbol,
+            direction=direction,
+            strength=strength,
+        ))
+        self._signals.append(strength <span class="kw">if</span> direction == <span class="str">"LONG"</span> <span class="kw">else</span> -strength)
+
+    <span class="kw">def</span> <span class="fn">reset</span>(self) -> <span class="kw">None</span>:
+        self._position = <span class="num">0.0</span>
+        self._signals = []</code></pre>
+
+  <hr class="divider">
+
+  <h3>Archivo: <code>strategy/mean_reversion_estimator.py</code></h3>
+  <p>Este archivo es el <strong>pegamento</strong> entre el engine y el pipeline de validación. Implementa el protocolo <code>FitPredictEstimator</code>.</p>
+
+  <div class="callout callout-key">
+    <strong>Contrato FitPredictEstimator:</strong><br>
+    <code>fit(is_segments: list[pl.DataFrame]) → self</code><br>
+    <code>predict(oos_data: pl.DataFrame) → tuple[pl.Series, pl.Series]</code><br><br>
+    <span class="tag">fit</span> solo ve IS. <span class="tag">predict</span> corre el EventLoop sobre OOS con los parámetros congelados del IS.
+  </div>
+
+  <pre><code><span class="kw">from</span> __future__ <span class="kw">import</span> annotations
+<span class="kw">from</span> queue <span class="kw">import</span> Queue
+<span class="kw">import</span> polars <span class="kw">as</span> pl
+<span class="kw">from</span> engine.data_handler <span class="kw">import</span> DataFrameDataHandler
+<span class="kw">from</span> engine.portfolio    <span class="kw">import</span> SimplePortfolio
+<span class="kw">from</span> engine.execution_handler <span class="kw">import</span> SimulatedExecutionHandler
+<span class="kw">from</span> engine.event_loop   <span class="kw">import</span> EventLoop
+<span class="kw">from</span> strategy.mean_reversion <span class="kw">import</span> MeanReversionStrategy
+
+
+<span class="kw">class</span> <span class="cls">MeanReversionEstimator</span>:
+    <span class="cm">"""
+    Encapsula fit + predict para que CPCVEngine no sepa nada de la estrategia.
+    Parámetros controlados por la grilla: window, entry_z, exit_z.
+    Parámetros internos aprendidos del IS: _mean, _std.
+    """</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(
+        self,
+        entry_z: <span class="nb">float</span> = <span class="num">2.0</span>,
+        exit_z:  <span class="nb">float</span> = <span class="num">0.5</span>,
+        initial_capital: <span class="nb">float</span> = <span class="num">100_000</span>,
+        position_pct:    <span class="nb">float</span> = <span class="num">0.02</span>,
+        slippage_pct:    <span class="nb">float</span> = <span class="num">0.001</span>,
+        commission_pct:  <span class="nb">float</span> = <span class="num">0.0006</span>,
+    ) -> <span class="kw">None</span>:
+        self._entry_z        = entry_z
+        self._exit_z         = exit_z
+        self._initial_capital = initial_capital
+        self._position_pct   = position_pct
+        self._slippage_pct   = slippage_pct
+        self._commission_pct = commission_pct
+        <span class="cm"># Aprendidos en fit():</span>
+        self._mean: <span class="nb">float</span> = <span class="num">0.0</span>
+        self._std:  <span class="nb">float</span> = <span class="num">1.0</span>
+
+    <span class="kw">def</span> <span class="fn">fit</span>(self, is_segments: <span class="nb">list</span>[pl.DataFrame]) -> <span class="str">"MeanReversionEstimator"</span>:
+        <span class="cm"># Concatena todos los bloques IS y estima la distribución del precio</span>
+        all_closes = pl.concat(is_segments)[<span class="str">"close"</span>]
+        self._mean = <span class="nb">float</span>(all_closes.mean())
+        self._std  = <span class="nb">float</span>(all_closes.std(ddof=<span class="num">1</span>))
+        <span class="kw">return</span> self
+
+    <span class="kw">def</span> <span class="fn">predict</span>(self, oos_data: pl.DataFrame) -> <span class="nb">tuple</span>[pl.Series, pl.Series]:
+        <span class="cm"># Instancia todo el engine con los parámetros del IS congelados</span>
+        q            = Queue()
+        data_handler = DataFrameDataHandler(q, <span class="str">"ASSET"</span>, oos_data)
+        strategy     = MeanReversionStrategy(
+            q, self._mean, self._std, self._entry_z, self._exit_z
+        )
+        portfolio    = SimplePortfolio(
+            q, self._initial_capital, self._position_pct
+        )
+        execution    = SimulatedExecutionHandler(
+            q,
+            slippage_pct=self._slippage_pct,
+            arancel_alyc_pct=self._commission_pct,
+        )
+        loop = EventLoop(q, data_handler, strategy, portfolio, execution)
+        loop.run(close_open_positions=<span class="kw">True</span>)  <span class="cm"># cierra posiciones al final del fold</span>
+
+        signals = pl.Series(<span class="str">"signals"</span>, strategy._signals)
+        <span class="kw">return</span> portfolio.returns_series, signals</code></pre>
+
+  <h3>La grilla de hiperparámetros y el factory</h3>
+  <pre><code><span class="cm"># Tres combinaciones a explorar:</span>
+grid = [
+    {<span class="str">"entry_z"</span>: <span class="num">1.5</span>, <span class="str">"exit_z"</span>: <span class="num">0.5</span>},  <span class="cm"># más agresivo, más trades</span>
+    {<span class="str">"entry_z"</span>: <span class="num">2.0</span>, <span class="str">"exit_z"</span>: <span class="num">0.5</span>},  <span class="cm"># balance</span>
+    {<span class="str">"entry_z"</span>: <span class="num">2.5</span>, <span class="str">"exit_z"</span>: <span class="num">1.0</span>},  <span class="cm"># más conservador, menos trades</span>
+]
+
+<span class="kw">def</span> <span class="fn">estimator_factory</span>(params: <span class="nb">dict</span>) -> MeanReversionEstimator:
+    <span class="kw">return</span> MeanReversionEstimator(
+        entry_z=params[<span class="str">"entry_z"</span>],
+        exit_z=params[<span class="str">"exit_z"</span>],
+    )</code></pre>
+
+  <div class="callout callout-info">
+    <strong>¿Qué hace el tuner con la grilla?</strong> Por cada combinación de parámetros, llama al estimador en múltiples folds internos del IS. Agrega los ganadores por <em>mediana</em> (para numéricos) o <em>moda</em> (para categóricos). El resultado es el <span class="tag">consensus_params</span> que se usa para el fit externo.
+  </div>
+
+  <h3>Diagrama de señales de la estrategia</h3>
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+graph LR
+    A[close_t llega<br/>via MarketEvent] --> B{Calcular<br/>z-score}
+    B --> C{Posición<br/>actual}
+    C -->|flat| D{z < -entry_z?}
+    C -->|flat| E{z > entry_z?}
+    C -->|long o short| F{abs z < exit_z?}
+    D -->|Sí| G["SignalEvent<br/>LONG, strength=|z|"]
+    D -->|No| H[sin señal]
+    E -->|Sí| I["SignalEvent<br/>SHORT, strength=z"]
+    E -->|No| H
+    F -->|Sí| J["SignalEvent<br/>EXIT, strength=0"]
+    F -->|No| K[mantener posición]
+    G --> L[Portfolio.on_signal<br/>→ OrderEvent LONG]
+    I --> M[Portfolio.on_signal<br/>→ OrderEvent SHORT]
+    J --> N[Portfolio.on_signal<br/>→ OrderEvent EXIT_LONG o EXIT_SHORT]
+
+    style G fill:#dcfce7,stroke:#15803d
+    style I fill:#fee2e2,stroke:#b91c1c
+    style J fill:#fff7ed,stroke:#c2410c
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     CPCV PIPELINE
+     ══════════════════════════════════════════════════════ -->
+<section id="cpcv">
+  <h2>🔬 CPCV Pipeline — validación estadística</h2>
+
+  <p>El <span class="tag">CPCVEngine</span> no valida una sola trayectoria OOS. Genera <strong>φ trayectorias independientes</strong> y te dice qué distribución de Sharpe podés esperar. Con N=6, k=2: 15 backtests → 5 trayectorias.</p>
+
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+graph TD
+    DATA[/"DataFrame completo<br/>ej. 5 años diario"/] --> ENGINE["CPCVEngine.run(data, runner)"]
+
+    ENGINE --> GROUPS["make_groups N=6<br/>G0 · G1 · G2 · G3 · G4 · G5"]
+
+    GROUPS --> SPLIT1["Combo 0,1 :<br/>IS = G2+G3+G4+G5 purgado/embargado<br/>Test = G0 y G1 por separado"]
+    GROUPS --> SPLIT2["Combo 0,2 :<br/>IS = G1+G3+G4+G5 purgado/embargado<br/>Test = G0 y G2 por separado"]
+    GROUPS --> DOTDOT["... 13 combos más<br/>C(6,2) = 15 en total"]
+
+    SPLIT1 --> RUNNER["runner(IS_segs, G0) → retornos OOS G0<br/>runner(IS_segs, G1) → retornos OOS G1"]
+    SPLIT2 --> RUNNER2["runner(IS_segs, G0) → retornos OOS G0<br/>runner(IS_segs, G2) → retornos OOS G2"]
+
+    RUNNER --> PATHS["Reconstruir φ=5 trayectorias<br/>cada path = concat de retornos OOS del mismo grupo<br/>a través de distintas combinaciones"]
+    RUNNER2 --> PATHS
+    DOTDOT --> PATHS
+
+    PATHS --> METRICS["Por trayectoria: Sharpe<br/>Sobre avg path: PSR · DSR · Max DD · Bootstrap"]
+    METRICS --> REPORT[/"ValidationReport<br/>summary()"/]
+
+    style DATA fill:#e8f0ff,stroke:#4361ee
+    style REPORT fill:#e8fff0,stroke:#2dc653
+    style RUNNER fill:#f3eeff,stroke:#8338ec
+    style RUNNER2 fill:#f3eeff,stroke:#8338ec
+    </div>
+  </div>
+
+  <h3>Purging y Embargo — por qué importan</h3>
+  <div class="two-col">
+    <div class="card">
+      <strong>Purging (label_horizon)</strong>
+      <p style="font-size:13px;margin-top:8px;">El último grupo IS antes del test se trunca en <code>label_horizon</code> barras. Motivo: si tu etiqueta mira h barras hacia adelante, las últimas h barras del IS "ven" datos del OOS. Se eliminan.</p>
+      <pre style="font-size:11px;"><code>IS: [........ ▓▓▓▓]  ← purge 1 barra
+Test:              [████]</code></pre>
+    </div>
+    <div class="card">
+      <strong>Embargo (embargo_pct)</strong>
+      <p style="font-size:13px;margin-top:8px;">El primer grupo IS después del test se recorta al inicio en <code>max(1, len(grupo) × embargo_pct)</code> barras. Motivo: autocorrelación serial entre el OOS y el IS siguiente.</p>
+      <pre style="font-size:11px;"><code>Test: [████]
+IS:         [▒▒ .......] ← embargo al inicio</code></pre>
+    </div>
+  </div>
+
+  <h3>Métricas del ValidationReport</h3>
+  <table class="trace-table">
+    <thead>
+      <tr><th>Métrica</th><th>Qué mide</th><th>Umbral verde</th><th>Dónde en el código</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Sharpe (avg path)</strong></td>
+        <td>Sharpe sobre el path promedio de las φ trayectorias</td>
+        <td>> 0.5</td>
+        <td class="mono">metrics["sharpe_avg_path"]</td>
+      </tr>
+      <tr>
+        <td><strong>PSR</strong></td>
+        <td>Prob. de que el verdadero Sharpe > 0. Ajusta por skew y kurtosis reales.</td>
+        <td>> 90%</td>
+        <td class="mono">metrics["psr_avg_path"]</td>
+      </tr>
+      <tr>
+        <td><strong>pct_positive_paths</strong></td>
+        <td>Fracción de las φ trayectorias con Sharpe > 0. Robustez del resultado.</td>
+        <td>> 60%</td>
+        <td class="mono">metrics["sharpes_per_path"]</td>
+      </tr>
+      <tr>
+        <td><strong>DSR</strong></td>
+        <td>PSR corregida por cuántos parámetros probaste. Penaliza p-hacking.</td>
+        <td>> 90% (si n_trials > 1)</td>
+        <td class="mono">metrics["dsr"]</td>
+      </tr>
+      <tr>
+        <td><strong>Bootstrap p5</strong></td>
+        <td>Percentil 5 del Sharpe en 10.000 resamplings por bloques. Preserva autocorrelación.</td>
+        <td>> 0</td>
+        <td class="mono">metrics["bootstrap"]["p5"]</td>
+      </tr>
+      <tr>
+        <td><strong>Max Drawdown</strong></td>
+        <td>Peor drawdown sobre el path promedio.</td>
+        <td>> -20%</td>
+        <td class="mono">metrics["max_drawdown"]</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-ok">
+    <strong>Veredicto de validez:</strong> un resultado es creíble para capital real cuando se cumplen <em>todas</em>: PSR &gt; 90%, ≥ 60% paths positivos, bootstrap p5 &gt; 0, DSR &gt; 90% si exploraste múltiples parámetros.
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     TRACE COMPLETO
+     ══════════════════════════════════════════════════════ -->
+<section id="trace">
+  <h2>🔍 Trace completo — qué pasa en cada paso</h2>
+
+  <p>Supongamos que corrés el pipeline completo con la mean-reverting en datos diarios de un activo. Esto es lo que sucede, en orden:</p>
+
+  <table class="trace-table">
+    <thead>
+      <tr><th>#</th><th>Quién actúa</th><th>Qué hace</th><th>Output</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>1</td>
+        <td><span class="badge b-runner">CPCVEngine</span></td>
+        <td>Divide el DataFrame en N=6 grupos cronológicos iguales</td>
+        <td class="mono">list[pl.DataFrame] × 6</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><span class="badge b-runner">CPCVEngine</span></td>
+        <td>Itera sobre C(6,2)=15 combinaciones de test</td>
+        <td>Para cada combo: test_set = {i,j}</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><span class="badge b-runner">CPCVEngine</span></td>
+        <td>Construye is_segments con purging y embargo sobre los 4 grupos restantes</td>
+        <td class="mono">list[pl.DataFrame] (1-4 segmentos)</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><span class="badge b-runner">BacktestRunner</span></td>
+        <td>Llama <code>tune_inner_is_segments(is_segments, grid)</code></td>
+        <td class="mono">consensus_params = {entry_z: 2.0, exit_z: 0.5}</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td><span class="badge b-runner">BacktestRunner</span></td>
+        <td>Instancia <code>MeanReversionEstimator(entry_z=2.0, exit_z=0.5)</code></td>
+        <td>Objeto no entrenado</td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td><span class="badge b-runner">Estimator</span></td>
+        <td><code>fit(is_segments)</code>: concat IS, calcula mean y std del precio</td>
+        <td class="mono">self._mean=142.3, self._std=18.7 (ej.)</td>
+      </tr>
+      <tr>
+        <td>7</td>
+        <td><span class="badge b-runner">Estimator</span></td>
+        <td><code>predict(oos_group_i)</code>: instancia Queue, DataHandler, Strategy, Portfolio, Execution, EventLoop</td>
+        <td>EventLoop listo para correr</td>
+      </tr>
+      <tr>
+        <td>8</td>
+        <td><span class="badge b-market">DataHandler</span></td>
+        <td>update_bars(): emite MarketEvent(ts, open=140.5, close=139.2)</td>
+        <td class="mono">MarketEvent → Queue</td>
+      </tr>
+      <tr>
+        <td>9</td>
+        <td><span class="badge b-fill">ExecutionHandler</span></td>
+        <td>fill_pending(140.5): si hay orden pendiente del bar anterior, la ejecuta al open</td>
+        <td class="mono">FillEvent(fill_price=140.64, commission=0.17)</td>
+      </tr>
+      <tr>
+        <td>10</td>
+        <td><span class="badge b-fill">Portfolio</span></td>
+        <td>on_fill(): cash -= 140.64 × qty + commission. Actualiza posiciones.</td>
+        <td>cash y positions actualizados</td>
+      </tr>
+      <tr>
+        <td>11</td>
+        <td><span class="badge b-signal">Strategy</span></td>
+        <td>on_market(): z = (139.2 - 142.3) / 18.7 = -0.17 → no cruza entry_z=2.0 → sin señal</td>
+        <td>nada en la Queue</td>
+      </tr>
+      <tr>
+        <td>12</td>
+        <td><span class="badge b-fill">Portfolio</span></td>
+        <td>update_market(): latest_prices["ASSET"]=139.2. equity_curve.append(equity)</td>
+        <td>equity_curve crece</td>
+      </tr>
+      <tr>
+        <td>13</td>
+        <td colspan="3" style="color:#888;font-style:italic;">... N barras después, close=105.1 → z = (105.1 - 142.3)/18.7 = -1.99 ≈ -entry_z ...</td>
+      </tr>
+      <tr>
+        <td>14</td>
+        <td><span class="badge b-signal">Strategy</span></td>
+        <td>z = -2.12 < -2.0 → emite SignalEvent(LONG, strength=2.12)</td>
+        <td class="mono">SignalEvent → Queue</td>
+      </tr>
+      <tr>
+        <td>15</td>
+        <td><span class="badge b-order">Portfolio</span></td>
+        <td>on_signal(LONG): qty = (100.000 × 0.02) / 105.1 = 19 acciones. Emite OrderEvent.</td>
+        <td class="mono">OrderEvent(LONG, qty=19, MKT) → Queue</td>
+      </tr>
+      <tr>
+        <td>16</td>
+        <td><span class="badge b-order">ExecutionHandler</span></td>
+        <td>on_order(): guarda en _pending. Esperará al open del próximo bar.</td>
+        <td class="mono">_pending = [OrderEvent]</td>
+      </tr>
+      <tr>
+        <td>17</td>
+        <td><span class="badge b-market">DataHandler</span></td>
+        <td>Siguiente barra: update_bars() → MarketEvent(open=105.5)</td>
+        <td class="mono">MarketEvent → Queue</td>
+      </tr>
+      <tr>
+        <td>18</td>
+        <td><span class="badge b-fill">ExecutionHandler</span></td>
+        <td>fill_pending(105.5): slippage=0.1 → fill_price=105.6. Emite FillEvent.</td>
+        <td class="mono">FillEvent(LONG, qty=19, fill=105.6, comm=0.12)</td>
+      </tr>
+      <tr>
+        <td>19</td>
+        <td>...</td>
+        <td>El loop continúa hasta agotar el OOS. Al final: force_close() cierra posiciones abiertas.</td>
+        <td></td>
+      </tr>
+      <tr>
+        <td>20</td>
+        <td><span class="badge b-runner">Estimator</span></td>
+        <td>predict() retorna (portfolio.returns_series, signals_series)</td>
+        <td class="mono">(pl.Series "returns", pl.Series "signals")</td>
+      </tr>
+      <tr>
+        <td>21</td>
+        <td><span class="badge b-runner">CPCVEngine</span></td>
+        <td>Repite pasos 4-20 para cada grupo de test de cada combinación (15×2=30 veces)</td>
+        <td class="mono">group_results[grupo][combo] = returns</td>
+      </tr>
+      <tr>
+        <td>22</td>
+        <td><span class="badge b-runner">CPCVEngine</span></td>
+        <td>_reconstruct_paths(): asigna resultados de cada grupo a las φ=5 trayectorias</td>
+        <td class="mono">paths_returns: list[pl.Series] × 5</td>
+      </tr>
+      <tr>
+        <td>23</td>
+        <td><span class="badge b-runner">CPCVEngine</span></td>
+        <td>Calcula Sharpe por trayectoria, PSR/DSR sobre avg path, max drawdown, bootstrap</td>
+        <td class="mono">ValidationReport.metrics</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════════════════════════════════════════════
+     CÓDIGO MÍNIMO
+     ══════════════════════════════════════════════════════ -->
+<section id="code">
+  <h2>💻 Código mínimo — de datos a ValidationReport</h2>
+
+  <p>Todo lo que necesitás para correr la mean-reverting con Nested CPCV de punta a punta:</p>
+
+  <pre><code><span class="kw">import</span> polars <span class="kw">as</span> pl
+<span class="kw">from</span> validation.config <span class="kw">import</span> ValidationConfig
+<span class="kw">from</span> validation.cpcv   <span class="kw">import</span> CPCVConfig, CPCVEngine
+<span class="kw">from</span> validation.tuning <span class="kw">import</span> build_nested_cpcv_runner
+<span class="kw">from</span> strategy.mean_reversion_estimator <span class="kw">import</span> MeanReversionEstimator
+
+<span class="cm"># ── 1. Datos ──────────────────────────────────────────────────────</span>
+data = pl.read_csv(<span class="str">"activo.csv"</span>, try_parse_dates=<span class="kw">True</span>).sort(<span class="str">"timestamp"</span>)
+<span class="cm"># Columnas mínimas: timestamp, open, close</span>
+
+<span class="cm"># ── 2. Configuración de validación ───────────────────────────────</span>
+val_cfg = ValidationConfig(
+    bars_per_year=<span class="num">252</span>,        <span class="cm"># datos diarios</span>
+    label_horizon=<span class="num">1</span>,           <span class="cm"># 1 barra de purge</span>
+    embargo_pct=<span class="num">0.01</span>,          <span class="cm"># 1% del fold como embargo</span>
+    block_bootstrap_reps=<span class="num">10_000</span>,
+    alpha_halflife_bars=<span class="num">20</span>,
+    n_trials=<span class="nb">len</span>(grid),        <span class="cm"># activa DSR</span>
+)
+
+cpcv_cfg = CPCVConfig(
+    n_groups=<span class="num">6</span>,               <span class="cm"># → C(6,2)=15 backtests, φ=5 paths</span>
+    n_test_groups=<span class="num">2</span>,
+)
+
+<span class="cm"># ── 3. Grilla de hiperparámetros ─────────────────────────────────</span>
+grid = [
+    {<span class="str">"entry_z"</span>: <span class="num">1.5</span>, <span class="str">"exit_z"</span>: <span class="num">0.5</span>},
+    {<span class="str">"entry_z"</span>: <span class="num">2.0</span>, <span class="str">"exit_z"</span>: <span class="num">0.5</span>},
+    {<span class="str">"entry_z"</span>: <span class="num">2.5</span>, <span class="str">"exit_z"</span>: <span class="num">1.0</span>},
+]
+
+<span class="kw">def</span> <span class="fn">estimator_factory</span>(params):
+    <span class="kw">return</span> MeanReversionEstimator(
+        entry_z=params[<span class="str">"entry_z"</span>],
+        exit_z=params[<span class="str">"exit_z"</span>],
+    )
+
+<span class="cm"># ── 4. Construir el runner anidado ────────────────────────────────</span>
+<span class="cm"># Este runner hace los 3 actos: tune (Acto1), fit (Acto2), predict (Acto3)</span>
+runner = build_nested_cpcv_runner(
+    val_cfg=val_cfg,
+    grid=grid,
+    estimator_factory=estimator_factory,
+    n_inner_splits=<span class="num">5</span>,
+)
+
+<span class="cm"># ── 5. Ejecutar ───────────────────────────────────────────────────</span>
+report = CPCVEngine(val_cfg, cpcv_cfg).run(data, runner)
+
+<span class="cm"># ── 6. Resultado ─────────────────────────────────────────────────</span>
+<span class="nb">print</span>(report.summary())
+
+<span class="cm"># Opcional: grafico equity vs SPY</span>
+report.plot_vs_spy(
+    output=<span class="str">"equity_vs_spy.png"</span>,
+    strategy_label=<span class="str">"Mean Reversion"</span>,
+    benchmark_ticker=<span class="str">"SPY"</span>,
+)</code></pre>
+
+  <h3>Output de <code>report.summary()</code></h3>
+  <pre><code><span class="cm">════════════════════════════════════════════════════════════
+  CPCV  ·  C=15 combinaciones  ·  φ=5 trayectorias  2020-01-01 → 2024-12-31
+════════════════════════════════════════════════════════════
+
+  Retorno anualizado              +12.3%
+  Sharpe (avg path)               0.847
+  Max Drawdown                   -11.2%
+  PSR (avg path)                  91.4%
+  DSR                             87.2%
+  Bootstrap Sharpe p5             0.312
+
+  Sharpe por trayectoria:
+     P1    P2    P3    P4    P5
+   +0.92  +0.71  +1.03  +0.68  +0.82
+  media 0.832  ·  std 0.134  ·  p5 0.692
+  5/5 paths positivos (100%)
+
+────────────────────────────────────────────────────────────
+  ⚠  DSR (3 trials): 87.2%   ← explorar más parámetros antes de live
+════════════════════════════════════════════════════════════</span></code></pre>
+
+  <div class="callout callout-info">
+    <strong>Archivos a crear:</strong>
+    <span class="tag">strategy/mean_reversion.py</span> (la Strategy) +
+    <span class="tag">strategy/mean_reversion_estimator.py</span> (el Estimator) +
+    tu script de ejecución. El resto del framework ya está listo.
+  </div>
+
+  <hr class="divider">
+
+  <h3>Resumen de responsabilidades — quién sabe qué</h3>
+  <table class="trace-table">
+    <thead>
+      <tr><th>Componente</th><th>Sabe de</th><th>NO sabe de</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Strategy</strong></td>
+        <td>Lógica de señal, z-score, parámetros congelados del IS</td>
+        <td>En qué fold está, tamaño de posición, precios de ejecución</td>
+      </tr>
+      <tr>
+        <td><strong>Portfolio</strong></td>
+        <td>Equity, cash, posiciones, position sizing</td>
+        <td>Por qué se genera cada señal, qué estrategia se usa</td>
+      </tr>
+      <tr>
+        <td><strong>ExecutionHandler</strong></td>
+        <td>Slippage, comisiones, precio de ejecución</td>
+        <td>Por qué se ordenó, qué estrategia genera las órdenes</td>
+      </tr>
+      <tr>
+        <td><strong>Estimator.fit()</strong></td>
+        <td>Distribución del IS (mean, std)</td>
+        <td>OOS (ni un dato del período de test)</td>
+      </tr>
+      <tr>
+        <td><strong>CPCVEngine</strong></td>
+        <td>Splits, purge/embargo, reconstrucción de paths, métricas</td>
+        <td>Qué estrategia corre adentro del runner</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+</div><!-- /page -->
+
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'base',
+  themeVariables: {
+    primaryColor: '#e8f0ff',
+    primaryTextColor: '#1a1a2e',
+    primaryBorderColor: '#4361ee',
+    lineColor: '#888',
+    secondaryColor: '#f3eeff',
+    tertiaryColor: '#eafff0',
+  },
+  flowchart: { curve: 'basis', padding: 20 },
+  sequence: { actorMargin: 80, messageMargin: 40 },
+});
+</script>
+</body>
+</html>
