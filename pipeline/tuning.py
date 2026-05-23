@@ -384,3 +384,38 @@ def consensus_params(winners: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     return result
 
+
+def select_threshold_by_time_decay(
+    results: pl.DataFrame,
+    half_life_days: float,
+) -> float:
+    """
+    Selecciona el z_threshold con mayor Sharpe ponderado por decaimiento exponencial.
+
+    Alternativa a consensus_params() cuando hay Concept Drift: penaliza folds
+    antiguos con w = 2^(-Δt / H), donde Δt es la distancia en días al fold
+    más reciente y H es el half_life_days.
+
+    Espera un DataFrame con columnas: fold_end_date, z_threshold, sharpe_ratio.
+    """
+    return float(
+        results
+        .with_columns(
+            (
+                pl.lit(2.0) ** (
+                    -(pl.col("fold_end_date").max() - pl.col("fold_end_date"))
+                    .dt.total_days()
+                    .cast(pl.Float64)
+                    / half_life_days
+                )
+            ).alias("weight")
+        )
+        .group_by("z_threshold")
+        .agg(
+            (
+                (pl.col("weight") * pl.col("sharpe_ratio")).sum()
+                / pl.col("weight").sum()
+            ).alias("weighted_sharpe")
+        )
+        .top_k(1, by="weighted_sharpe")["z_threshold"][0]
+    )
