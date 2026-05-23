@@ -15,7 +15,8 @@ DataHandler → MarketEvent → Strategy → SignalEvent → Portfolio → Order
 |---|---|
 | `DataHandler` | Guardián del tiempo. Barrera estricta: imposible entregar datos del futuro. |
 | `Strategy` | Recibe datos, devuelve señales. No sabe en qué fold está. |
-| `Portfolio` | Position sizing y filtros de riesgo. No conoce la estrategia. |
+| `PositionSizer` | Calcula la cantidad a operar dado el signal, equity y precio. Inyectable en Portfolio. |
+| `Portfolio` | Contabilidad y filtros de riesgo. Delega el sizing al `PositionSizer` inyectado. |
 | `ExecutionHandler` | Ejecución simulada con slippage y comisiones. Reemplazable por broker real. |
 
 El motor no implementa estrategias: las orquesta y valida.
@@ -76,6 +77,47 @@ CPCVConfig(n_groups=6, n_test_groups=2)
 - `build_nested_cpcv_runner(...)` ejecuta el tuning, el fit externo y el predict externo;
 - `tune_flat_dataset(...)` queda como ruta de deployment para extraer parametros sobre todo el dataset;
 - la salida de tuning no reemplaza al backtest final.
+
+---
+
+## Position Sizing — PositionSizer
+
+El sizing está desacoplado del `Portfolio` en `strategy/sizing.py`.
+
+```python
+class PositionSizer(ABC):
+    def size(self, signal, equity, price, positions) -> float: ...
+
+class FixedFractionSizer(PositionSizer):
+    # quantity = equity * fraction / price
+```
+
+`Portfolio` recibe el sizer por constructor. `SimplePortfolio` es un wrapper de conveniencia que usa `FixedFractionSizer`:
+
+```python
+# Custom sizer:
+portfolio = Portfolio(queue, capital, sizer=MiKellySizer())
+
+# Equivalente al comportamiento anterior:
+portfolio = SimplePortfolio(queue, capital, position_pct=0.02)
+```
+
+---
+
+## Series IS discontinuas — Hamilton (1994)
+
+En CPCV, los segmentos IS pueden ser no contiguos. Concatenarlos directamente corrompe modelos con memoria temporal (Kalman, ARIMA, state space).
+
+`validation/hamilton.py` provee `build_gapped_is()`:
+
+```python
+gapped = build_gapped_is(is_segments, full_data)
+# Retorna pl.DataFrame con is_observed: bool
+# is_observed=True  → barra IS real, aporta a la log-verosimilitud
+# is_observed=False → barra de gap, NaN en datos, solo propaga estado
+```
+
+Pasar `gapped["close"].to_numpy()` (con NaN) a `statsmodels.tsa.statespace.MLEModel` aplica el filtro de Kalman de Hamilton: freeze del update en gaps, propagación de covarianza, `L` acumulada solo sobre IS.
 
 ---
 
@@ -156,14 +198,18 @@ Un resultado es creíble para capital real cuando se cumplen **todas**:
 │   ├── tuning.py          # Grid tuning + consenso entre folds
 │   ├── metrics.py         # Sharpe, PSR, DSR, bootstrap, max_drawdown
 │   ├── plots.py           # plot_equity_vs_benchmark
-│   ├── stress_testing.py   # Stress testing genérico sobre BacktestRunner
+│   ├── hamilton.py        # build_gapped_is() — series IS discontinuas con NaN gaps
+│   ├── stress_testing.py  # Stress testing genérico sobre BacktestRunner
 │   └── report.py          # ValidationReport + plot_vs_spy()
 ├── engine/
 │   ├── events.py
 │   ├── data_handler.py
-│   ├── portfolio.py
+│   ├── portfolio.py       # Portfolio(sizer) + SimplePortfolio
 │   ├── execution_handler.py
 │   └── event_loop.py
+├── strategy/
+│   ├── base.py            # Strategy ABC
+│   └── sizing.py          # PositionSizer ABC + FixedFractionSizer
 └── examples/
     ├── __init__.py
     └── production_tuning.py  # script generico para tuning de deployment
