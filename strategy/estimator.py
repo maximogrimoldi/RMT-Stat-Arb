@@ -5,7 +5,6 @@ from typing import Any, Callable
 
 import polars as pl
 
-from engine.data_handler import DataFrameDataHandler
 from engine.execution_handler import SimulatedExecutionHandler
 from engine.event_loop import EventLoop
 from engine.portfolio import Portfolio
@@ -17,14 +16,13 @@ class EventDrivenEstimator:
     Envuelve una Strategy event-driven como FitPredictEstimator.
 
     Permite que build_nested_cpcv_runner use el engine completo en cada
-    evaluación del tuning: slippage, comisiones y fills al open reales.
+    evaluación del tuning: slippage, comisiones y fills realistas.
     """
 
     def __init__(
         self,
         strategy_factory: Callable[..., Strategy],
         params: dict[str, Any],
-        symbol: str,
         initial_capital: float,
         slippage_pct: float = 0.0,
         derecho_mercado_pct: float = 0.0,
@@ -32,7 +30,6 @@ class EventDrivenEstimator:
     ) -> None:
         self._strategy_factory = strategy_factory
         self._params = params
-        self._symbol = symbol
         self._initial_capital = initial_capital
         self._slippage_pct = slippage_pct
         self._derecho_mercado_pct = derecho_mercado_pct
@@ -49,7 +46,6 @@ class EventDrivenEstimator:
             strategy.fit(self._is_segments)
 
         queue     = Queue()
-        handler   = DataFrameDataHandler(self._symbol, oos_data)
         portfolio = Portfolio(queue, self._initial_capital)
         execution = SimulatedExecutionHandler(
             queue,
@@ -58,7 +54,7 @@ class EventDrivenEstimator:
             arancel_alyc_pct    = self._arancel_alyc_pct,
         )
 
-        loop = EventLoop(queue, handler, strategy, portfolio, execution)
+        loop = EventLoop(queue, oos_data, strategy, portfolio, execution)
         loop.run()
 
         returns = portfolio.returns_series

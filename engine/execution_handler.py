@@ -1,9 +1,8 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from datetime import datetime
 from queue import Queue
 
-from engine.events import FillEvent, OrderEvent, OrderDirection
+from engine.events import FillEvent, OrderEvent
 
 
 class ExecutionHandler(ABC):
@@ -13,12 +12,11 @@ class ExecutionHandler(ABC):
 
     @abstractmethod
     def on_order(self, event: OrderEvent) -> None:
-        """Encola la orden para ejecutar en el próximo open."""
         pass
 
     @abstractmethod
-    def fill_pending(self, open_price: float, timestamp: datetime) -> None:
-        """Ejecuta órdenes pendientes al open del bar actual."""
+    def fill_pending(self, prices: dict[str, float], timestamp) -> None:
+        """Ejecuta órdenes pendientes al precio actual de cada símbolo."""
         pass
 
     @property
@@ -57,13 +55,14 @@ class SimulatedExecutionHandler(ExecutionHandler):
     def on_order(self, event: OrderEvent) -> None:
         self._pending.append(event)
 
-    def fill_pending(self, open_price: float, timestamp: datetime) -> None:
+    def fill_pending(self, prices: dict[str, float], timestamp) -> None:
         for order in self._pending:
-            slippage = self.calculate_slippage(open_price, order.quantity)
-            if order.direction in ("LONG", "EXIT_SHORT"):  # compra
-                fill_price = open_price + slippage
-            else:                                           # SHORT o EXIT_LONG (venta)
-                fill_price = open_price - slippage
+            price    = prices[order.symbol]
+            slippage = self.calculate_slippage(price, order.quantity)
+            if order.direction in ("LONG", "EXIT_SHORT"):
+                fill_price = price + slippage
+            else:
+                fill_price = price - slippage
             commission = self.calculate_commission(order.quantity, fill_price)
             self._events_queue.put(FillEvent(
                 timestamp=timestamp,

@@ -9,7 +9,6 @@ from engine.events import FillEvent, OrderEvent
 class Portfolio:
     """
     Reconcilia target weights con posición actual y genera OrderEvents.
-    No conoce la estrategia ni la lógica de sizing.
     """
 
     def __init__(self, events_queue: Queue, initial_capital: float) -> None:
@@ -20,16 +19,19 @@ class Portfolio:
         self._latest_prices: dict[str, float] = {}
         self._equity_curve: list[float] = []
 
-    def on_weights(self, weights: dict[str, float], close: float, timestamp) -> None:
-        for symbol in weights:
-            self._latest_prices[symbol] = close
+    def on_weights(self, weights: dict[str, float], prices: dict[str, float], timestamp) -> None:
+        self._latest_prices.update(prices)
         self._equity_curve.append(self.equity)
 
         for symbol, target_weight in weights.items():
+            price = prices.get(symbol, 0.0)
+            if price == 0.0:
+                continue
+
             current_qty   = self._positions.get(symbol, 0.0)
             target_value  = self.equity * target_weight
-            current_value = current_qty * close
-            delta_qty     = (target_value - current_value) / close
+            current_value = current_qty * price
+            delta_qty     = (target_value - current_value) / price
 
             if abs(delta_qty) < 1e-6:
                 continue
