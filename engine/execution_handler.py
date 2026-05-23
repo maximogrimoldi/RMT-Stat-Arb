@@ -21,6 +21,11 @@ class ExecutionHandler(ABC):
         """Ejecuta órdenes pendientes al open del bar actual."""
         pass
 
+    @property
+    @abstractmethod
+    def slippage_pct(self) -> float:
+        pass
+
     @abstractmethod
     def calculate_slippage(self, price: float, quantity: float) -> float:
         pass
@@ -44,6 +49,10 @@ class SimulatedExecutionHandler(ExecutionHandler):
         self._derecho_mercado_pct = derecho_mercado_pct
         self._arancel_alyc_pct = arancel_alyc_pct
         self._pending: list[OrderEvent] = []
+
+    @property
+    def slippage_pct(self) -> float:
+        return self._slippage_pct
 
     def on_order(self, event: OrderEvent) -> None:
         self._pending.append(event)

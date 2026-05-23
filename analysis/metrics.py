@@ -14,7 +14,11 @@ def sharpe_ratio(returns: pl.Series, annualization_factor: float = 252.0) -> flo
     return float(arr.mean() / std * np.sqrt(annualization_factor))
 
 
-def probabilistic_sharpe_ratio(returns: pl.Series, benchmark_sr: float = 0.0) -> float:
+def probabilistic_sharpe_ratio(
+    returns: pl.Series,
+    benchmark_sr: float = 0.0,
+    bars_per_year: float = 252.0,
+) -> float:
     """
     PSR = Φ[ (SR̂ − SR*) · √(T−1) / √(1 − γ₃·SR̂ + ((γ₄−1)/4)·SR̂²) ]
     SR̂ y SR* en escala per-bar. benchmark_sr se recibe anualizado y se convierte.
@@ -29,7 +33,7 @@ def probabilistic_sharpe_ratio(returns: pl.Series, benchmark_sr: float = 0.0) ->
         return float("nan")
 
     sr = arr.mean() / std
-    sr_star = benchmark_sr / np.sqrt(252)
+    sr_star = benchmark_sr / np.sqrt(bars_per_year)
     skew = float(scipy.stats.skew(arr))
     kurt = float(scipy.stats.kurtosis(arr))  # excess kurtosis
 
@@ -53,13 +57,18 @@ def expected_max_sharpe(n_trials: int, sr_mean: float = 0.0, sr_std: float = 1.0
     return sr_mean + sr_std * ((1 - euler) * z1 + euler * z2)
 
 
-def deflated_sharpe_ratio(returns: pl.Series, n_trials: int, benchmark_sr: float = 0.0) -> float:
+def deflated_sharpe_ratio(
+    returns: pl.Series,
+    n_trials: int,
+    benchmark_sr: float = 0.0,
+    bars_per_year: float = 252.0,
+) -> float:
     """
     DSR: PSR donde SR* se ajusta por el número de trials realizados.
     Penaliza el p-hacking al elevar el benchmark esperado del mejor entre n_trials.
     """
-    sr_star_annualized = expected_max_sharpe(n_trials) * np.sqrt(252)
-    return probabilistic_sharpe_ratio(returns, benchmark_sr=sr_star_annualized)
+    sr_star_annualized = expected_max_sharpe(n_trials) * np.sqrt(bars_per_year)
+    return probabilistic_sharpe_ratio(returns, benchmark_sr=sr_star_annualized, bars_per_year=bars_per_year)
 
 
 def block_bootstrap_sharpe(
@@ -117,12 +126,3 @@ def max_drawdown(returns: pl.Series) -> float:
     return float(((equity - peak) / peak).min())
 
 
-def trade_stats(signals: pl.Series) -> dict[str, int]:
-    arr = np.sign(signals.to_numpy())
-    long_entries  = int(np.sum((arr[:-1] <= 0) & (arr[1:] > 0))) if len(arr) > 1 else 0
-    short_entries = int(np.sum((arr[:-1] >= 0) & (arr[1:] < 0))) if len(arr) > 1 else 0
-    return {
-        "total_trades": long_entries + short_entries,
-        "long_trades":  long_entries,
-        "short_trades": short_entries,
-    }

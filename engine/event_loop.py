@@ -24,7 +24,7 @@ class EventLoop:
         self._portfolio = portfolio
         self._execution_handler = execution_handler
 
-    def run(self, close_open_positions: bool = True, slippage_pct: float = 0.0) -> None:
+    def run(self, close_open_positions: bool = True) -> None:
         while self._data_handler.has_more_data:
             self._data_handler.update_bars()
             market_event = self._queue.get()
@@ -39,8 +39,9 @@ class EventLoop:
             self._drain_queue()  # procesa SignalEvents y OrderEvents
 
         if close_open_positions:
+            slip = self._execution_handler.slippage_pct
             for symbol in list(self._portfolio._positions):
-                self._portfolio.force_close(symbol, slippage_pct=slippage_pct)
+                self._portfolio.force_close(symbol, slippage_pct=slip)
 
     def _drain_queue(self) -> None:
         while True:

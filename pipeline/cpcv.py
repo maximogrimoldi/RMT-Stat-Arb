@@ -149,7 +149,7 @@ class CPCVEngine:
         ))
 
         sr_avg    = sharpe_ratio(avg_returns, bpy)
-        psr_avg   = probabilistic_sharpe_ratio(avg_returns)
+        psr_avg   = probabilistic_sharpe_ratio(avg_returns, bars_per_year=bpy)
         mdd_avg   = max_drawdown(avg_returns)
         ann_r_avg = annualized_return(avg_returns, bpy)
 
@@ -167,7 +167,7 @@ class CPCVEngine:
         report.add(Severity.INFO, "max_drawdown", f"Max drawdown (avg path): {mdd_avg:.2%}")
 
         if self._cfg.n_trials > 1:
-            dsr = deflated_sharpe_ratio(avg_returns, self._cfg.n_trials)
+            dsr = deflated_sharpe_ratio(avg_returns, self._cfg.n_trials, bars_per_year=bpy)
             report.metrics["dsr"] = dsr
             sev = Severity.WARNING if (np.isnan(dsr) or dsr < 0.95) else Severity.INFO
             label = f"{dsr:.1%}" if not np.isnan(dsr) else "nan"
@@ -216,8 +216,6 @@ class CPCVEngine:
         for group_idx in range(n):
             combos_with_group = sorted(c for c in all_combos if group_idx in c)
             for p, combo in enumerate(combos_with_group):
-                if p >= phi:
-                    break
                 if combo not in group_results.get(group_idx, {}):
                     continue
                 paths[p].append(group_results[group_idx][combo])

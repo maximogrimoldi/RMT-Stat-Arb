@@ -50,9 +50,6 @@ class NestedTuningResult:
     consensus_params: dict[str, Any]
 
 
-TuningResult = NestedTuningResult
-
-
 def default_score(returns: pl.Series, signals: pl.Series) -> float:
     del signals
     return sharpe_ratio(returns)
@@ -219,7 +216,7 @@ def tune_flat_dataset(
     grid: list[dict],
     runner_factory: Callable,
     n_splits: int = 5,
-) -> TuningResult:
+) -> NestedTuningResult:
     """
     Tuning flat sobre el dataset completo.
     Divide la serie en bloques cronologicos, usa cada bloque como holdout
@@ -262,7 +259,7 @@ def tune_flat_dataset(
         raise ValueError("No se pudieron evaluar splits validos para flat tuning.")
 
     weights = _decay_weights(fold_end_dates, val_cfg.half_life_days)
-    return TuningResult(
+    return NestedTuningResult(
         fold_results=split_results,
         consensus_params=_consensus_params(winners, weights),
     )
@@ -273,10 +270,6 @@ def _fit_estimator(estimator: FitPredictEstimator, is_segments: list[pl.DataFram
     return fitted if fitted is not None else estimator
 
 
-def _inner_blocks_from_is_segments(is_segments: list[pl.DataFrame]) -> list[pl.DataFrame]:
-    return [seg for seg in is_segments if len(seg) > 0]
-
-
 def tune_inner_is_segments(
     is_segments: list[pl.DataFrame],
     val_cfg: ValidationConfig,
@@ -284,13 +277,13 @@ def tune_inner_is_segments(
     estimator_factory: EstimatorFactory,
     n_splits: int = 5,
     score_fn: ScoreFn = default_score,
-) -> TuningResult:
+) -> NestedTuningResult:
     """
     Acto 1: tuning interno usando exclusivamente los bloques IS.
     Cada bloque se trata como una unidad cronologica y se usa purge/embargo
     al armar los train segments del inner split. Winners ponderados por recencia.
     """
-    groups = _inner_blocks_from_is_segments(is_segments)
+    groups = [seg for seg in is_segments if len(seg) > 0]
     if len(groups) < 2:
         raise ValueError("Se necesitan al menos 2 bloques IS para el tuning interno.")
 
@@ -351,7 +344,7 @@ def tune_inner_is_segments(
         raise ValueError("No se pudieron construir folds internos validos.")
 
     weights = _decay_weights(fold_end_dates, val_cfg.half_life_days)
-    return TuningResult(
+    return NestedTuningResult(
         fold_results=fold_results,
         consensus_params=_consensus_params(winners, weights),
     )

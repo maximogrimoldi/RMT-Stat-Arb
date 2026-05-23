@@ -79,41 +79,15 @@ class DataFrameDataHandler(DataHandler):
 
     @property
     def has_more_data(self) -> bool:
-        return self._cursor < len(self._data)
+        return self._data is not None and self._cursor < len(self._data)
 
 
-class CSVDataHandler(DataHandler):
+class CSVDataHandler(DataFrameDataHandler):
 
     def __init__(self, events_queue: Queue, symbol: str, warmup_bars: int = 0) -> None:
-        super().__init__(events_queue, warmup_bars)
+        DataHandler.__init__(self, events_queue, warmup_bars)
         self._symbol = symbol
         self._cursor = warmup_bars
 
     def load(self, source: str) -> None:
         self._data = pl.read_csv(source, try_parse_dates=True).sort("timestamp")
-
-    def update_bars(self) -> None:
-        if not self.has_more_data:
-            return
-        row = self._data.row(self._cursor, named=True)
-        self._cursor += 1
-        self._events_queue.put(MarketEvent(
-            timestamp=row["timestamp"],
-            symbol=self._symbol,
-            open=row["open"],
-            close=row["close"],
-        ))
-
-    def get_latest_bars(self, symbol: str, n: int = 1) -> pl.DataFrame:
-        start = max(0, self._cursor - n)
-        return self._data.slice(start, self._cursor - start)
-
-    @property
-    def current_timestamp(self) -> datetime | None:
-        if self._cursor == 0:
-            return None
-        return self._data.row(self._cursor - 1, named=True)["timestamp"]
-
-    @property
-    def has_more_data(self) -> bool:
-        return self._data is not None and self._cursor < len(self._data)
