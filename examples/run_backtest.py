@@ -4,6 +4,9 @@ Backtester completo listo para correr.
 Única línea que cambia entre estrategias:
     from strategy.rmt_strategy import RMTStrategy   ← tu estrategia
 
+Todo el proceso — tuning de hiperparámetros, fit sobre IS, backtest sobre OOS —
+usa el engine completo: slippage, comisiones y fills al open reales.
+
 Requisitos del dataset:
     Columnas obligatorias: timestamp | open | close
     Ordenado cronológicamente (o no — se ordena automáticamente).
@@ -11,37 +14,44 @@ Requisitos del dataset:
 from __future__ import annotations
 
 from pathlib import Path
-from queue import Queue
 
 import polars as pl
 
-from engine.data_handler import DataFrameDataHandler
-from engine.execution_handler import SimulatedExecutionHandler
-from engine.event_loop import EventLoop
-from engine.portfolio import SimplePortfolio
 from pipeline.config import ValidationConfig
 from pipeline.cpcv import CPCVConfig, CPCVEngine
+from pipeline.tuning import build_nested_cpcv_runner
+from strategy.estimator import EventDrivenEstimator
 
 # ── ÚNICO IMPORT QUE CAMBIA ───────────────────────────────────────────────
-from strategy.rmt_strategy import RMTStrategy   # noqa: E402
+from strategy.rmt_strategy import RMTStrategy
 
 
-# ── DATASET ──────────────────────────────────────────────────────────────
+# ── DATASET ───────────────────────────────────────────────────────────────
 DATA_PATH = Path("data/dataset.parquet")   # parquet o csv
 SYMBOL    = "RMT"
 
 
-# ── PARÁMETROS DE LA ESTRATEGIA ───────────────────────────────────────────
-# Se pasan directamente al constructor de RMTStrategy.
+# ── HIPERPARÁMETROS (grilla para nested CPCV) ─────────────────────────────
+# El tuning interno busca el mejor valor en cada fold IS.
+# Si no tenés hiperparámetros que buscar, dejá un solo dict vacío.
+PARAM_GRID = [
+    # {"z_threshold": 1.0},
+    # {"z_threshold": 1.5},
+    # {"z_threshold": 2.0},
+    {},   # sin hiperparámetros — el tuning corre igual pero con un solo candidato
+]
+
+
+# ── PARÁMETROS FIJOS DE LA ESTRATEGIA ────────────────────────────────────
+# Se pasan siempre al constructor de RMTStrategy, independientemente del tuning.
 STRATEGY_PARAMS: dict = {
     # "ventana": 20,
-    # "z_threshold": 1.5,
 }
 
 
 # ── EJECUCIÓN ─────────────────────────────────────────────────────────────
 INITIAL_CAPITAL = 100_000.0
-POSITION_PCT    = 0.02        # fracción del equity por trade (FixedFractionSizer)
+POSITION_PCT    = 0.02   # fracción del equity por trade (FixedFractionSizer)
 
 EXECUTION = dict(
     slippage_pct        = 0.001,
@@ -50,14 +60,14 @@ EXECUTION = dict(
 )
 
 
-# ── VALIDACIÓN CPCV ──────────────────────────────────────────────────────
+# ── VALIDACIÓN CPCV ───────────────────────────────────────────────────────
 VAL_CFG = ValidationConfig(
-    bars_per_year   = 252,     # 252 diario | 52 semanal | 12 mensual
-    label_horizon   = 5,       # barras de purging (horizonte del label)
-    embargo_pct     = 0.01,    # 1% del grupo post-test embargado
-    half_life_days  = 365,     # decay para consenso de hiperparámetros
-    n_trials        = 1,       # >1 activa DSR (penaliza p-hacking)
-    block_bootstrap_reps = 0,  # 10_000 para bootstrap (lento pero robusto)
+    bars_per_year        = 252,    # 252 diario | 52 semanal | 12 mensual
+    label_horizon        = 5,      # barras de purging (horizonte del label)
+    embargo_pct          = 0.01,   # 1% del grupo post-test embargado
+    half_life_days       = 365,    # decay para consenso de hiperparámetros
+    n_trials             = len(PARAM_GRID),   # activa DSR si hay múltiples candidatos
+    block_bootstrap_reps = 0,      # 10_000 para bootstrap (lento pero robusto)
 )
 
 CPCV_CFG = CPCVConfig(
@@ -66,36 +76,21 @@ CPCV_CFG = CPCVConfig(
 )
 
 
-# ── RUNNER FACTORY ────────────────────────────────────────────────────────
-def make_runner(params: dict):
+# ── ESTIMATOR FACTORY ─────────────────────────────────────────────────────
+def estimator_factory(params: dict) -> EventDrivenEstimator:
     """
-    Devuelve un BacktestRunner: callable(is_segments, oos_data) → (returns, signals).
-    Se llama C(N,k)*k veces — cada vez reinicializa todo desde cero.
+    Crea un estimador para cada combinación de hiperparámetros.
+    params viene de PARAM_GRID — hiperparámetros que el tuning está evaluando.
+    STRATEGY_PARAMS son los parámetros fijos que siempre se pasan.
     """
-    def runner(
-        is_segments: list[pl.DataFrame],
-        oos_data: pl.DataFrame,
-    ) -> tuple[pl.Series, pl.Series]:
-
-        queue    = Queue()
-        strategy = RMTStrategy(queue, **params)
-
-        # Fit sobre IS si la estrategia implementa fit()
-        # (calibrar parámetros, ajustar modelos, etc.)
-        if hasattr(strategy, "fit"):
-            strategy.fit(is_segments)
-
-        handler   = DataFrameDataHandler(queue, SYMBOL, oos_data)
-        portfolio = SimplePortfolio(queue, INITIAL_CAPITAL, position_pct=POSITION_PCT)
-        execution = SimulatedExecutionHandler(queue, **EXECUTION)
-        loop      = EventLoop(queue, handler, strategy, portfolio, execution)
-        loop.run()
-
-        returns = portfolio.returns_series
-        signals = pl.Series("signals", [1.0] * len(returns))  # reemplazar con señales reales si las tenés
-        return returns, signals
-
-    return runner
+    return EventDrivenEstimator(
+        strategy_factory = RMTStrategy,
+        params           = {**STRATEGY_PARAMS, **params},
+        symbol           = SYMBOL,
+        initial_capital  = INITIAL_CAPITAL,
+        position_pct     = POSITION_PCT,
+        **EXECUTION,
+    )
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────
@@ -114,10 +109,18 @@ def main() -> None:
     print(f"CPCV: N={CPCV_CFG.n_groups}, k={CPCV_CFG.n_test_groups}  →  "
           f"C({CPCV_CFG.n_groups},{CPCV_CFG.n_test_groups}) backtests, "
           f"φ={CPCV_CFG.n_groups - CPCV_CFG.n_test_groups} trayectorias")
+    print(f"Grilla: {len(PARAM_GRID)} candidato(s)")
     print()
 
+    runner = build_nested_cpcv_runner(
+        val_cfg           = VAL_CFG,
+        grid              = PARAM_GRID,
+        estimator_factory = estimator_factory,
+        n_inner_splits    = 4,
+    )
+
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)
-    report = engine.run(data, runner=make_runner(STRATEGY_PARAMS))
+    report = engine.run(data, runner=runner)
 
     print(report.summary())
 
