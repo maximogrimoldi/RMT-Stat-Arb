@@ -27,6 +27,7 @@ class EventDrivenEstimator:
         slippage_pct: float = 0.0,
         derecho_mercado_pct: float = 0.0,
         arancel_alyc_pct: float = 0.0,
+        rebalance_frequency: str = "daily",
     ) -> None:
         self._strategy_factory = strategy_factory
         self._params = params
@@ -34,6 +35,7 @@ class EventDrivenEstimator:
         self._slippage_pct = slippage_pct
         self._derecho_mercado_pct = derecho_mercado_pct
         self._arancel_alyc_pct = arancel_alyc_pct
+        self._rebalance_frequency = rebalance_frequency
         self._is_segments: list[pl.DataFrame] = []
 
     def fit(self, is_segments: list[pl.DataFrame]) -> "EventDrivenEstimator":
@@ -54,7 +56,8 @@ class EventDrivenEstimator:
             arancel_alyc_pct    = self._arancel_alyc_pct,
         )
 
-        loop = EventLoop(queue, oos_data, strategy, portfolio, execution)
+        loop = EventLoop(queue, oos_data, strategy, portfolio, execution,
+                         rebalance_frequency=self._rebalance_frequency)
         loop.run()
 
         returns = portfolio.returns_series

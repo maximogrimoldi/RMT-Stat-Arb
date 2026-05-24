@@ -69,6 +69,11 @@ class Portfolio:
         else:  # SHORT
             self._positions[event.symbol] = self._positions.get(event.symbol, 0) - event.quantity
 
+    def update_market(self, prices: dict[str, float], timestamp) -> None:
+        """Actualiza precios y equity en días sin rebalanceo."""
+        self._latest_prices.update(prices)
+        self._equity_curve.append(self.equity)
+
     def force_close(self, symbol: str, slippage_pct: float = 0.0) -> None:
         qty = self._positions.get(symbol, 0)
         if qty == 0:

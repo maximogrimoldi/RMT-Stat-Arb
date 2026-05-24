@@ -284,12 +284,37 @@ def tune_inner_is_segments(
     al armar los train segments del inner split. Winners ponderados por recencia.
     """
     groups = [seg for seg in is_segments if len(seg) > 0]
+    if not groups:
+        raise ValueError("No hay segmentos IS no vacíos.")
+
+    # With only 1 IS segment, fall back to internal time-series splits
     if len(groups) < 2:
-        raise ValueError("Se necesitan al menos 2 bloques IS para el tuning interno.")
+        folds = _inner_splits(groups[0], n_splits)
+        if not folds:
+            raise ValueError("No se pudieron construir folds internos para tuning.")
+        candidates: list[CandidateResult] = []
+        for params in grid:
+            scores: list[float] = []
+            for train_df, test_df in folds:
+                est = estimator_factory(params)
+                try:
+                    fitted = _fit_estimator(est, [train_df])
+                    returns, signals = fitted.predict(test_df)
+                    scores.append(float(score_fn(returns, signals)))
+                except Exception:
+                    scores.append(float("nan"))
+                finally:
+                    del est
+            mean_s, med_s, std_s = _summarize_scores(scores)
+            candidates.append(CandidateResult(params=dict(params), scores=scores,
+                                               mean_score=mean_s, median_score=med_s, std_score=std_s))
+        best = _select_best_candidate(candidates)
+        return NestedTuningResult(
+            fold_results=[FoldTuningResult(combo=(0,), best_candidate=best, candidates=candidates)],
+            consensus_params=best.params,
+        )
 
     n_inner = min(n_splits, len(groups))
-    if n_inner < 2:
-        raise ValueError("n_splits debe ser >= 2.")
 
     fold_results: list[FoldTuningResult] = []
     winners: list[Mapping[str, Any]] = []

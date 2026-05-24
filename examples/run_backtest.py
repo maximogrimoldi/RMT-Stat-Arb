@@ -22,23 +22,24 @@ from pipeline.tuning import build_nested_cpcv_runner
 from strategy.estimator import EventDrivenEstimator
 
 # ── ÚNICO IMPORT QUE CAMBIA ───────────────────────────────────────────────
-from strategy.rmt_strategy import RMTStrategy
+from strategy.example_strategy import MACrossStrategy
 
 
 # ── HIPERPARÁMETROS (grilla para nested CPCV) ─────────────────────────────
 PARAM_GRID = [
-    # {"z_threshold": 1.0},
-    # {"z_threshold": 1.5},
-    {},   # sin hiperparámetros — el tuning corre igual pero con un solo candidato
+    {"fast_window": 5},
+    {"fast_window": 10},
+    {"fast_window": 20},
 ]
 
 # ── PARÁMETROS FIJOS DE LA ESTRATEGIA ────────────────────────────────────
 STRATEGY_PARAMS: dict = {
-    # "ventana": 20,
+    "slow_window": 50,
 }
 
 # ── EJECUCIÓN ─────────────────────────────────────────────────────────────
-INITIAL_CAPITAL = 100_000.0
+INITIAL_CAPITAL      = 100_000.0
+REBALANCE_FREQUENCY  = "monthly"   # "daily" | "weekly" | "monthly"
 
 EXECUTION = dict(
     slippage_pct        = 0.001,
@@ -65,9 +66,10 @@ CPCV_CFG = CPCVConfig(
 # ── ESTIMATOR FACTORY ─────────────────────────────────────────────────────
 def estimator_factory(params: dict) -> EventDrivenEstimator:
     return EventDrivenEstimator(
-        strategy_factory = RMTStrategy,
-        params           = {**STRATEGY_PARAMS, **params},
-        initial_capital  = INITIAL_CAPITAL,
+        strategy_factory    = MACrossStrategy,
+        params              = {**STRATEGY_PARAMS, **params},
+        initial_capital     = INITIAL_CAPITAL,
+        rebalance_frequency = REBALANCE_FREQUENCY,
         **EXECUTION,
     )
 
@@ -79,13 +81,6 @@ def main(data: pl.DataFrame) -> None:
     """
     data = data.sort("timestamp")
 
-    print(f"Dataset: {len(data)} barras  |  {data['timestamp'].min()} → {data['timestamp'].max()}")
-    print(f"CPCV: N={CPCV_CFG.n_groups}, k={CPCV_CFG.n_test_groups}  →  "
-          f"C({CPCV_CFG.n_groups},{CPCV_CFG.n_test_groups}) backtests, "
-          f"φ={CPCV_CFG.n_groups - CPCV_CFG.n_test_groups} trayectorias")
-    print(f"Grilla: {len(PARAM_GRID)} candidato(s)")
-    print()
-
     runner = build_nested_cpcv_runner(
         val_cfg           = VAL_CFG,
         grid              = PARAM_GRID,
@@ -96,5 +91,4 @@ def main(data: pl.DataFrame) -> None:
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)
     report = engine.run(data, runner=runner)
 
-    print(report.metrics)
-    print(f"{len(report.equity_curves)} equity curves OOS")
+    return report.metrics, report.equity_curves
