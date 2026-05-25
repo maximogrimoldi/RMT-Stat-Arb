@@ -24,7 +24,7 @@ from pipeline.config import ValidationConfig
 from pipeline.splits import build_train_segments, make_groups
 from analysis.metrics import (
     annualized_return, block_bootstrap_sharpe, deflated_sharpe_ratio,
-    max_drawdown, probabilistic_sharpe_ratio, sharpe_ratio,
+    market_regression, max_drawdown, probabilistic_sharpe_ratio, sharpe_ratio,
 )
 from analysis.report import ValidationReport
 
@@ -61,7 +61,7 @@ class CPCVEngine:
         self._cpcv = cpcv_config
         self.paths_returns: list[pl.Series] = []
 
-    def run(self, data: pl.DataFrame, runner: BacktestRunner) -> ValidationReport:
+    def run(self, data: pl.DataFrame, runner: BacktestRunner, market_data: pl.DataFrame | None = None) -> ValidationReport:
         n, k = self._cpcv.n_groups, self._cpcv.n_test_groups
 
         if k >= n:
@@ -81,7 +81,8 @@ class CPCVEngine:
 
         all_combos = list(_combinations(range(n), k))
 
-        group_results: dict[int, dict[tuple, pl.Series]] = {i: {} for i in range(n)}
+        # (returns, timestamps) por grupo y combinación
+        group_results: dict[int, dict[tuple, tuple[pl.Series, list]]] = {i: {} for i in range(n)}
         for combo in all_combos:
             test_set   = set(combo)
             train_segs = self._get_train_segments(groups, test_set)
@@ -89,9 +90,11 @@ class CPCVEngine:
                 continue
             for group_idx in combo:
                 rets, _ = runner(train_segs, groups[group_idx])
-                group_results[group_idx][combo] = rets
+                # timestamps[1:] alinea con los retornos (pct_change descarta la primera barra)
+                timestamps = groups[group_idx]["timestamp"].to_list()[1:][:len(rets)]
+                group_results[group_idx][combo] = (rets, timestamps)
 
-        paths_returns = self._reconstruct_paths(group_results, all_combos, n, phi)
+        paths_returns, paths_timestamps = self._reconstruct_paths(group_results, all_combos, n, phi)
         self.paths_returns = paths_returns
 
         if not paths_returns:
@@ -124,14 +127,29 @@ class CPCVEngine:
             "psr_avg_path":         probabilistic_sharpe_ratio(avg_returns, bars_per_year=bpy),
             "max_drawdown":         max_drawdown(avg_returns),
             "annualized_return_avg": annualized_return(avg_returns, bpy),
+            "dsr":                   deflated_sharpe_ratio(avg_returns, self._cfg.n_trials, bars_per_year=bpy),
         }
-
-        if self._cfg.n_trials > 1:
-            metrics["dsr"] = deflated_sharpe_ratio(avg_returns, self._cfg.n_trials, bars_per_year=bpy)
 
         if self._cfg.block_bootstrap_reps > 0:
             block_len = self._cfg.alpha_halflife_bars or 20
             metrics["bootstrap"] = block_bootstrap_sharpe(avg_returns, self._cfg.block_bootstrap_reps, block_len)
+
+        if market_data is not None:
+            per_path = []
+            for rets, ts in zip(paths_returns, paths_timestamps):
+                path_df = pl.DataFrame({"timestamp": ts, "strat": rets})
+                joined  = path_df.join(market_data, on="timestamp", how="inner")
+                if len(joined) < 4:
+                    continue
+                strat_s = joined["strat"]
+                mkt_s   = joined["mkt_return"]
+                per_path.append(market_regression(strat_s, mkt_s, bpy))
+
+            if per_path:
+                keys = per_path[0].keys()
+                metrics["market_regression"] = {
+                    k: float(np.mean([p[k] for p in per_path])) for k in keys
+                }
 
         return ValidationReport(
             metrics=metrics,
@@ -166,19 +184,24 @@ class CPCVEngine:
 
     def _reconstruct_paths(
         self,
-        group_results: dict[int, dict[tuple, pl.Series]],
+        group_results: dict[int, dict[tuple, tuple[pl.Series, list]]],
         all_combos: list[tuple],
         n: int,
         phi: int,
-    ) -> list[pl.Series]:
-        paths: list[list[pl.Series]] = [[] for _ in range(phi)]
+    ) -> tuple[list[pl.Series], list[list]]:
+        paths_rets: list[list[pl.Series]] = [[] for _ in range(phi)]
+        paths_ts:   list[list[list]]      = [[] for _ in range(phi)]
 
         for group_idx in range(n):
             combos_with_group = sorted(c for c in all_combos if group_idx in c)
             for p, combo in enumerate(combos_with_group):
                 if combo not in group_results.get(group_idx, {}):
                     continue
-                paths[p].append(group_results[group_idx][combo])
+                rets, ts = group_results[group_idx][combo]
+                paths_rets[p].append(rets)
+                paths_ts[p].append(ts)
 
-        valid = [i for i, segs in enumerate(paths) if segs and all(len(s) > 0 for s in segs)]
-        return [pl.concat(paths[i]) for i in valid]
+        valid = [i for i, segs in enumerate(paths_rets) if segs and all(len(s) > 0 for s in segs)]
+        returns    = [pl.concat(paths_rets[i]) for i in valid]
+        timestamps = [[t for seg in paths_ts[i] for t in seg] for i in valid]
+        return returns, timestamps

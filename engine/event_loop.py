@@ -57,7 +57,9 @@ class EventLoop:
 
             if self._is_rebalance_day(timestamp, prev_timestamp):
                 history = segment.slice(0, i + 1)
-                weights = self._strategy.get_weights(history)
+                positions = {s: (1 if q > 0 else -1 if q < 0 else 0)
+                             for s, q in self._portfolio._positions.items()}
+                weights = self._strategy.get_weights(history, positions)
                 self._portfolio.on_weights(weights, prices, timestamp)
                 self._drain_queue()
             else:

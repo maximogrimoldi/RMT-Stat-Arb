@@ -48,6 +48,7 @@ def expected_max_sharpe(n_trials: int, sr_mean: float = 0.0, sr_std: float = 1.0
     """
     E[max SR] entre n_trials estrategias con SR ~ N(sr_mean, sr_std).
     Aproximación de Bailey & López de Prado (2014).
+    sr_mean y sr_std en términos anualizados. Devuelve SR anualizado.
     """
     if n_trials <= 1:
         return sr_mean
@@ -65,9 +66,9 @@ def deflated_sharpe_ratio(
 ) -> float:
     """
     DSR: PSR donde SR* se ajusta por el número de trials realizados.
-    Penaliza el p-hacking al elevar el benchmark esperado del mejor entre n_trials.
+    Prior: SR de estrategias ~ N(0, 1) en términos anualizados.
     """
-    sr_star_annualized = expected_max_sharpe(n_trials) * np.sqrt(bars_per_year)
+    sr_star_annualized = expected_max_sharpe(n_trials)
     return probabilistic_sharpe_ratio(returns, benchmark_sr=sr_star_annualized, bars_per_year=bars_per_year)
 
 
@@ -124,5 +125,34 @@ def max_drawdown(returns: pl.Series) -> float:
     equity = np.cumprod(1 + returns.to_numpy())
     peak = np.maximum.accumulate(equity)
     return float(((equity - peak) / peak).min())
+
+
+def market_regression(
+    strategy_returns: pl.Series,
+    market_returns: pl.Series,
+    bars_per_year: float = 252.0,
+) -> dict[str, float]:
+    """
+    OLS de retornos de la estrategia contra el mercado.
+    Devuelve alpha anualizado, beta, R² e information ratio (alpha/tracking error).
+    """
+    y = strategy_returns.to_numpy()
+    x = market_returns.to_numpy()
+    n = min(len(y), len(x))
+    y, x = y[-n:], x[-n:]
+
+    slope, intercept, r_value, _, _ = scipy.stats.linregress(x, y)
+
+    residuals = y - (intercept + slope * x)
+    tracking_error = residuals.std()
+    alpha_annualized = intercept * bars_per_year
+    ir = float(alpha_annualized / (tracking_error * np.sqrt(bars_per_year))) if tracking_error > 0 else 0.0
+
+    return {
+        "alpha":              alpha_annualized,
+        "beta":               float(slope),
+        "r_squared":          float(r_value ** 2),
+        "information_ratio":  ir,
+    }
 
 

@@ -47,6 +47,19 @@ class EventDrivenEstimator:
         if hasattr(strategy, "fit"):
             strategy.fit(self._is_segments)
 
+        if self._is_segments:
+            q_is = Queue()
+            exec_is = SimulatedExecutionHandler(
+                q_is,
+                slippage_pct        = self._slippage_pct,
+                derecho_mercado_pct = self._derecho_mercado_pct,
+                arancel_alyc_pct    = self._arancel_alyc_pct,
+            )
+            EventLoop(
+                q_is, self._is_segments, strategy, Portfolio(q_is, self._initial_capital), exec_is,
+                rebalance_frequency = self._rebalance_frequency,
+            ).run(close_open_positions=True)
+
         queue     = Queue()
         portfolio = Portfolio(queue, self._initial_capital)
         execution = SimulatedExecutionHandler(
@@ -55,7 +68,6 @@ class EventDrivenEstimator:
             derecho_mercado_pct = self._derecho_mercado_pct,
             arancel_alyc_pct    = self._arancel_alyc_pct,
         )
-
         loop = EventLoop(queue, oos_data, strategy, portfolio, execution,
                          rebalance_frequency=self._rebalance_frequency)
         loop.run()

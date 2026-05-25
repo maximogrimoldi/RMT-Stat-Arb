@@ -15,6 +15,7 @@ Requisitos del DataFrame:
 from __future__ import annotations
 
 import polars as pl
+import yfinance as yf
 
 from pipeline.config import ValidationConfig
 from pipeline.cpcv import CPCVConfig, CPCVEngine
@@ -22,19 +23,19 @@ from pipeline.tuning import build_nested_cpcv_runner
 from strategy.estimator import EventDrivenEstimator
 
 # ── ÚNICO IMPORT QUE CAMBIA ───────────────────────────────────────────────
-from strategy.example_strategy import MACrossStrategy
+from strategy.example_strategy import MeanReversionStrategy
 
 
 # ── HIPERPARÁMETROS (grilla para nested CPCV) ─────────────────────────────
 PARAM_GRID = [
-    {"fast_window": 5},
-    {"fast_window": 10},
-    {"fast_window": 20},
+    {"z_threshold": 0.5},
+    {"z_threshold": 1.0},
+    {"z_threshold": 1.5},
 ]
 
 # ── PARÁMETROS FIJOS DE LA ESTRATEGIA ────────────────────────────────────
 STRATEGY_PARAMS: dict = {
-    "slow_window": 50,
+    "lookback": 20,
 }
 
 # ── EJECUCIÓN ─────────────────────────────────────────────────────────────
@@ -63,10 +64,13 @@ CPCV_CFG = CPCVConfig(
 )
 
 
+# ── BENCHMARK ────────────────────────────────────────────────────────────
+BENCHMARK_TICKER = "^GSPC"
+
 # ── ESTIMATOR FACTORY ─────────────────────────────────────────────────────
 def estimator_factory(params: dict) -> EventDrivenEstimator:
     return EventDrivenEstimator(
-        strategy_factory    = MACrossStrategy,
+        strategy_factory    = MeanReversionStrategy,
         params              = {**STRATEGY_PARAMS, **params},
         initial_capital     = INITIAL_CAPITAL,
         rebalance_frequency = REBALANCE_FREQUENCY,
@@ -75,11 +79,32 @@ def estimator_factory(params: dict) -> EventDrivenEstimator:
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────
+def _fetch_benchmark(start: str, end: str) -> pl.DataFrame | None:
+    try:
+        raw = yf.download(BENCHMARK_TICKER, start=start, end=end, auto_adjust=True, progress=False)["Close"]
+        raw = raw.reset_index()
+        raw.columns = ["timestamp", "close"]
+        return (
+            pl.from_pandas(raw)
+            .with_columns(pl.col("timestamp").cast(pl.Date))
+            .sort("timestamp")
+            .with_columns(pl.col("close").pct_change().alias("mkt_return"))
+            .drop_nulls("mkt_return")
+            .select(["timestamp", "mkt_return"])
+        )
+    except Exception:
+        return None
+
+
 def main(data: pl.DataFrame) -> None:
     """
     data: DataFrame con columna 'timestamp' y una columna por símbolo con closes.
     """
     data = data.sort("timestamp")
+
+    start = str(data["timestamp"].min())[:10]
+    end   = str(data["timestamp"].max())[:10]
+    mkt   = _fetch_benchmark(start, end)
 
     runner = build_nested_cpcv_runner(
         val_cfg           = VAL_CFG,
@@ -89,6 +114,9 @@ def main(data: pl.DataFrame) -> None:
     )
 
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)
-    report = engine.run(data, runner=runner)
+    report = engine.run(data, runner=runner, market_data=mkt)
 
     return report.metrics, report.equity_curves
+    
+
+
