@@ -36,30 +36,12 @@ class EventDrivenEstimator:
         self._derecho_mercado_pct = derecho_mercado_pct
         self._arancel_alyc_pct = arancel_alyc_pct
         self._rebalance_frequency = rebalance_frequency
-        self._is_segments: list[pl.DataFrame] = []
 
     def fit(self, is_segments: list[pl.DataFrame]) -> "EventDrivenEstimator":
-        self._is_segments = is_segments
         return self
 
     def predict(self, oos_data: pl.DataFrame) -> tuple[pl.Series, pl.Series]:
-        strategy = self._strategy_factory(**self._params)
-        if hasattr(strategy, "fit"):
-            strategy.fit(self._is_segments)
-
-        if self._is_segments:
-            q_is = Queue()
-            exec_is = SimulatedExecutionHandler(
-                q_is,
-                slippage_pct        = self._slippage_pct,
-                derecho_mercado_pct = self._derecho_mercado_pct,
-                arancel_alyc_pct    = self._arancel_alyc_pct,
-            )
-            EventLoop(
-                q_is, self._is_segments, strategy, Portfolio(q_is, self._initial_capital), exec_is,
-                rebalance_frequency = self._rebalance_frequency,
-            ).run(close_open_positions=True)
-
+        strategy  = self._strategy_factory(**self._params)
         queue     = Queue()
         portfolio = Portfolio(queue, self._initial_capital)
         execution = SimulatedExecutionHandler(

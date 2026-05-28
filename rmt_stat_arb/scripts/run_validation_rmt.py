@@ -1,11 +1,13 @@
 """
-run_validation_rmt.py — Conecta RMTStrategy con el motor CPCV real.
+run_validation_rmt.py — Conecta RMTStrategy con el motor CPCV.
 
-Patrón: examples/run_backtest.py del Backtester (no se toca el motor ni core.py).
+Arquitectura precompute (López de Prado):
+  1. calcular_residuos_rolling corre UNA VEZ sobre el dataset completo → _RESIDUOS_PD.
+  2. En cada barra OOS, get_weights() slicéa _RESIDUOS_PD hasta la fecha actual.
+  3. El engine sigue usando precios reales para contabilidad (fills, notional).
 
-Único cambio de interfaz: el motor pasa pl.DataFrame a get_weights, pero
-RMTStrategy espera pd.DataFrame con DatetimeIndex. Lo resuelve RMTStrategyPolars,
-una subclase delgada que convierte el input y delega en super().get_weights().
+Único cambio de interfaz: el motor pasa pl.DataFrame; RMTStrategy espera
+pd.DataFrame con DatetimeIndex. Lo resuelve RMTStrategyPolarsPrecomputed.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import polars as pl
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _RMT_ROOT    = _SCRIPTS_DIR.parent                 # → rmt_stat_arb/
 _CODIGO_DIR  = _RMT_ROOT / "codigo"               # RMTStrategy, data.*
-_BACKTESTER  = _RMT_ROOT.parent / "Backtester"    # motor CPCV
+_BACKTESTER  = _RMT_ROOT.parent                    # motor CPCV (mismo repo)
 
 # ── Orden de importación — resuelve conflicto de namespace "strategy/" ────────
 #
@@ -79,15 +81,6 @@ def _pl_to_pd(data: pl.DataFrame) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index)
     return df
 
-def _pd_to_pl(df: pd.DataFrame) -> pl.DataFrame:
-    col = df.index.name or "index"
-    return (
-        pl.from_pandas(df.reset_index())
-        .rename({col: "timestamp"})
-        .with_columns(pl.col("timestamp").cast(pl.Date))
-    )
-
-
 # ── Wrappers Polars → pandas ──────────────────────────────────────────────────
 
 class RMTStrategyPolars(RMTStrategy):
@@ -99,25 +92,44 @@ class RMTStrategyPolars(RMTStrategy):
         return super().get_weights(_pl_to_pd(data), current_positions=positions)
 
 
+# Residuos pre-computados compartidos entre todas las instancias de la corrida
+_RESIDUOS_PD: "pd.DataFrame | None" = None
+
+
 class RMTStrategyPolarsPrecomputed(RMTStrategy):
     """
-    Para CPCV con precompute: recibe slices de residuos pre-computados.
-    precompute() corre calcular_residuos_rolling una sola vez sobre el dataset completo.
-    get_weights() solo calcula z-score + entry/exit — sin rolling computation.
+    Para CPCV con precompute.
+
+    precompute(): corre calcular_residuos_rolling una vez sobre el dataset
+      completo y guarda los residuos en _RESIDUOS_PD. Devuelve los PRECIOS
+      sin cambiar — el engine los sigue usando para contabilidad (fills, notional).
+
+    get_weights(): ignora la historia de precios recibida y busca los residuos
+      hasta la fecha actual en _RESIDUOS_PD. Así el portfolio ve precios reales
+      y la estrategia ve residuos pre-computados.
     """
     def precompute(self, data: pl.DataFrame) -> pl.DataFrame:
+        global _RESIDUOS_PD
         residuos_pd = super().precompute(_pl_to_pd(data))
-        return _pd_to_pl(residuos_pd)
+        _RESIDUOS_PD = residuos_pd
+        return data  # precios sin cambiar
 
     def get_weights(self, data: pl.DataFrame, positions: dict) -> dict:
-        return super()._get_weights_from_residuals(_pl_to_pd(data), positions)
+        tickers = [c for c in data.columns if c != "timestamp"]
+        vacío   = {t: 0.0 for t in tickers}
+
+        if _RESIDUOS_PD is None:
+            return vacío
+
+        current_date   = pd.Timestamp(data["timestamp"].tail(1)[0])
+        residuos_slice = _RESIDUOS_PD[_RESIDUOS_PD.index <= current_date]
+        return super()._get_weights_from_residuals(residuos_slice, positions)
 
 
 # ── Grid de hiperparámetros ───────────────────────────────────────────────────
-# ventana_betas=60 / ventana_zscore=60 reduce el calentamiento de 252 a 60 días
 PARAM_GRID: list[dict] = [
     {"entry_threshold": e, "exit_threshold": 1.0,
-     "ventana_betas": 60, "ventana_zscore": 60,
+     "ventana_betas": 252, "ventana_zscore": 252,
      "sizing_by_zscore": s}
     for e in [1.5, 2.0, 2.5]
     for s in [True, False]
@@ -254,7 +266,7 @@ def main() -> None:
     print(f"  % paths positivos : {m['pct_positive_paths']:.1%}")
     if "market_regression" in m:
         mr = m["market_regression"]
-        print(f"  Alpha (anual)     : {mr.get('alpha_annualized', float('nan')):.3f}")
+        print(f"  Alpha (anual)     : {mr.get('alpha', float('nan')):.3f}")
         print(f"  Beta              : {mr.get('beta', float('nan')):.3f}")
     print("═"*52)
 
