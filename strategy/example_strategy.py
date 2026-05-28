@@ -12,6 +12,10 @@ class MeanReversionStrategy(Strategy):
     Hiperparámetro (tuneado por CPCV): z_threshold
     Parámetro fijo:                    lookback
 
+    fit() aprende media y std de precios del IS. En OOS, el z-score se calcula
+    contra esas estadísticas IS (nivel de equilibrio aprendido), con fallback
+    a ventana rolling si no hay fit previo.
+
     Señal por activo: long si z-score < -z_threshold (precio anormalmente bajo).
     Sizing: equal weight entre los activos con señal.
     """
@@ -19,6 +23,20 @@ class MeanReversionStrategy(Strategy):
     def __init__(self, z_threshold: float = 1.0, lookback: int = 20) -> None:
         self.z_threshold = z_threshold
         self.lookback = lookback
+        self._fitted_stats: dict[str, tuple[float, float]] = {}
+
+    def fit(self, is_segments: list[pl.DataFrame]) -> "MeanReversionStrategy":
+        full_is = pl.concat(is_segments).sort("timestamp")
+        symbols = [c for c in full_is.columns if c != "timestamp"]
+        self._fitted_stats = {}
+        for sym in symbols:
+            prices = full_is[sym].drop_nulls()
+            if len(prices) < 2:
+                continue
+            std = float(prices.std())
+            if std > 0:
+                self._fitted_stats[sym] = (float(prices.mean()), std)
+        return self
 
     def get_weights(self, data: pl.DataFrame, positions: dict[str, float]) -> dict[str, float]:
         symbols = [c for c in data.columns if c != "timestamp"]
@@ -29,11 +47,18 @@ class MeanReversionStrategy(Strategy):
         z_scores: dict[str, float] = {}
         for sym in symbols:
             prices = data[sym]
-            window = prices[-self.lookback:]
-            std    = window.std()
-            if not std:
-                continue
-            z_scores[sym] = (prices[-1] - window.mean()) / std
+            current = float(prices[-1])
+
+            if sym in self._fitted_stats:
+                mean, std = self._fitted_stats[sym]
+            else:
+                window = prices[-self.lookback:]
+                std = float(window.std())
+                if not std:
+                    continue
+                mean = float(window.mean())
+
+            z_scores[sym] = (current - mean) / std
 
         longs = []
         for sym in symbols:
@@ -41,11 +66,9 @@ class MeanReversionStrategy(Strategy):
             pos = positions.get(sym, 0)
 
             if pos == 1:
-                # ya long: mantener hasta que el precio vuelva a la media
                 if z is not None and z < 0:
                     longs.append(sym)
             elif pos <= 0:
-                # flat o short (esta strat no opera short): entrar long si precio muy bajo
                 if z is not None and z < -self.z_threshold:
                     longs.append(sym)
 
