@@ -1,0 +1,14 @@
+{
+  "sharpe_mean": 0.4508,
+  "sharpe_std": 0.2734,
+  "psr": 0.6127,
+  "dsr": 0.6109,
+  "n_paths": 5,
+  "consensus_params": {
+    "entry_threshold": 2.0,
+    "exit_threshold": 1.0,
+    "ventana_betas": 252,
+    "ventana_zscore": 252,
+    "sizing_by_zscore": false
+  }
+}
