@@ -47,6 +47,58 @@ class RMTStrategy:
             for s  in [True, False]
         ]
 
+    def precompute(self, prices: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calcula residuos rolling una sola vez sobre el dataset completo.
+        Retorna residuos_df con mismo índice y columnas que pct_change(prices).
+        Llamar antes de CPCV; get_weights() recibirá slices de este DataFrame.
+        """
+        retornos = prices.pct_change().dropna()
+        residuos_df, _, _ = self.rmt.calcular_residuos_rolling(
+            retornos, ventana=self.ventana_betas
+        )
+        return residuos_df
+
+    def _get_weights_from_residuals(
+        self,
+        residuos: pd.DataFrame,
+        current_positions: "dict | None" = None,
+    ) -> dict:
+        """
+        Calcula señales a partir de residuos pre-computados (slice del dataset).
+        No llama calcular_residuos_rolling — solo z-score + entry/exit.
+        """
+        if current_positions is None:
+            current_positions = {}
+
+        tickers = list(residuos.columns)
+        vacío   = {t: 0.0 for t in tickers}
+
+        residuos_validos = residuos.dropna()
+        if len(residuos_validos) < 2:
+            return vacío
+
+        ventana_z = residuos_validos.iloc[-self.ventana_zscore:]
+        acum      = np.cumsum(ventana_z.values, axis=0)
+        zs        = pd.Series(self.rmt.zscore(acum), index=tickers)
+
+        posiciones_finales: dict = {}
+        for t in tickers:
+            z          = float(zs[t]) if not np.isnan(zs[t]) else 0.0
+            pos_actual = current_positions.get(t, 0)
+            if pos_actual != 0:
+                z_cruzó = (pos_actual * z > 0)
+                if abs(z) >= self.exit_threshold and not z_cruzó:
+                    posiciones_finales[t] = pos_actual
+            else:
+                if z < -self.entry_threshold:
+                    posiciones_finales[t] = 1
+                elif z > self.entry_threshold:
+                    posiciones_finales[t] = -1
+
+        pesos = self._calcular_pesos(posiciones_finales, zs)
+        return {t: pesos.get(t, 0.0) for t in tickers}
+
     def _calcular_pesos(self, posiciones: dict, zs: pd.Series) -> dict:
         """
         Convierte {ticker: signo (+1/-1)} a {ticker: peso con signo}.

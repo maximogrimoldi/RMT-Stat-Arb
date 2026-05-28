@@ -381,12 +381,17 @@ def build_nested_cpcv_runner(
     estimator_factory: EstimatorFactory,
     n_inner_splits: int = 5,
     score_fn: ScoreFn = default_score,
+    precompute_fn: "Callable[[pl.DataFrame], pl.DataFrame] | None" = None,
 ) -> BacktestRunner:
     """
     Construye un BacktestRunner que ejecuta:
       1) tuning interno sobre IS,
       2) fit externo sobre todo el IS con el hiperparametro consenso,
       3) predict ciego sobre OOS.
+
+    precompute_fn: opcional. Si se provee, CPCVEngine la llama una vez sobre el
+      dataset completo antes de hacer splits. El runner recibe features pre-computadas
+      en lugar de precios crudos. Útil para features con ventanas largas (ej. RMT).
     """
 
     def runner(is_segments: list[pl.DataFrame], oos_data: pl.DataFrame) -> tuple[pl.Series, pl.Series]:
@@ -409,4 +414,5 @@ def build_nested_cpcv_runner(
             del estimator
             del tuning
 
+    runner.precompute = precompute_fn
     return runner

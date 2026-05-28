@@ -72,20 +72,45 @@ from pipeline.tuning    import build_nested_cpcv_runner
 from strategy.estimator import EventDrivenEstimator   # ya en sys.modules
 
 
-# ── Wrapper Polars → pandas ───────────────────────────────────────────────────
+# ── Helpers de conversión ─────────────────────────────────────────────────────
+
+def _pl_to_pd(data: pl.DataFrame) -> pd.DataFrame:
+    df = data.to_pandas().set_index("timestamp")
+    df.index = pd.to_datetime(df.index)
+    return df
+
+def _pd_to_pl(df: pd.DataFrame) -> pl.DataFrame:
+    col = df.index.name or "index"
+    return (
+        pl.from_pandas(df.reset_index())
+        .rename({col: "timestamp"})
+        .with_columns(pl.col("timestamp").cast(pl.Date))
+    )
+
+
+# ── Wrappers Polars → pandas ──────────────────────────────────────────────────
 
 class RMTStrategyPolars(RMTStrategy):
     """
-    Subclase delgada: convierte el pl.DataFrame que pasa el motor al pd.DataFrame
-    con DatetimeIndex que espera RMTStrategy. No modifica ninguna lógica.
-
-    El motor llama:  get_weights(history: pl.DataFrame, positions: {ticker: +1/-1/0})
-    RMTStrategy usa: get_weights(prices:  pd.DataFrame, current_positions=...)
+    Para paper trading: recibe precios crudos, corre el pipeline completo.
+    El motor llama:  get_weights(history: pl.DataFrame, positions: dict)
     """
     def get_weights(self, data: pl.DataFrame, positions: dict) -> dict:
-        prices_pd = data.to_pandas().set_index("timestamp")
-        prices_pd.index = pd.to_datetime(prices_pd.index)
-        return super().get_weights(prices_pd, current_positions=positions)
+        return super().get_weights(_pl_to_pd(data), current_positions=positions)
+
+
+class RMTStrategyPolarsPrecomputed(RMTStrategy):
+    """
+    Para CPCV con precompute: recibe slices de residuos pre-computados.
+    precompute() corre calcular_residuos_rolling una sola vez sobre el dataset completo.
+    get_weights() solo calcula z-score + entry/exit — sin rolling computation.
+    """
+    def precompute(self, data: pl.DataFrame) -> pl.DataFrame:
+        residuos_pd = super().precompute(_pl_to_pd(data))
+        return _pd_to_pl(residuos_pd)
+
+    def get_weights(self, data: pl.DataFrame, positions: dict) -> dict:
+        return super()._get_weights_from_residuals(_pl_to_pd(data), positions)
 
 
 # ── Grid de hiperparámetros ───────────────────────────────────────────────────
@@ -123,19 +148,18 @@ CPCV_CFG = CPCVConfig(
     n_test_groups = 2,
 )
 
-_RESULTS_DIR = _RMT_ROOT / "results" / "cpcv_v60"
+_RESULTS_DIR = _RMT_ROOT / "results" / "cpcv_precomputed"
 
 
 # ── Estimator factory ─────────────────────────────────────────────────────────
 
 def estimator_factory(params: dict) -> EventDrivenEstimator:
     """
-    Cada llamada del tuner crea un EventDrivenEstimator fresco con los params
-    de esa combinación. params viene directamente de PARAM_GRID — contiene
-    todos los argumentos de RMTStrategy.__init__.
+    Usa RMTStrategyPolarsPrecomputed: get_weights() recibe residuos pre-computados
+    y solo calcula z-score + entry/exit, sin recorrer calcular_residuos_rolling.
     """
     return EventDrivenEstimator(
-        strategy_factory    = RMTStrategyPolars,
+        strategy_factory    = RMTStrategyPolarsPrecomputed,
         params              = params,
         initial_capital     = INITIAL_CAPITAL,
         rebalance_frequency = REBALANCE_FREQUENCY,
@@ -204,11 +228,13 @@ def main() -> None:
 
     # ── CPCV ──────────────────────────────────────────────────────────────────
     print("\n[*] Construyendo runner nested CPCV…")
+    _precompute_strat = RMTStrategyPolarsPrecomputed(**PARAM_GRID[0])
     runner = build_nested_cpcv_runner(
         val_cfg           = VAL_CFG,
         grid              = PARAM_GRID,
         estimator_factory = estimator_factory,
         n_inner_splits    = 4,
+        precompute_fn     = _precompute_strat.precompute,
     )
 
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)

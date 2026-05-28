@@ -62,6 +62,10 @@ class CPCVEngine:
         self.paths_returns: list[pl.Series] = []
 
     def run(self, data: pl.DataFrame, runner: BacktestRunner, market_data: pl.DataFrame | None = None) -> ValidationReport:
+        precompute_fn = getattr(runner, 'precompute', None)
+        if precompute_fn is not None:
+            data = precompute_fn(data)
+
         n, k = self._cpcv.n_groups, self._cpcv.n_test_groups
 
         if k >= n:
