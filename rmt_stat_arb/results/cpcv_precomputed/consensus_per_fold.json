@@ -14,21 +14,14 @@
     "sizing_by_zscore": true
   },
   {
-    "entry_threshold": 2.4950059675222263,
+    "entry_threshold": 1.5049940324777737,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 2.4950059675222263,
-    "exit_threshold": 1,
-    "sizing_by_zscore": true,
-    "ventana_betas": 252,
-    "ventana_zscore": 252
-  },
-  {
-    "entry_threshold": 2.4999999999999996,
+    "entry_threshold": 1.5049940324777737,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
@@ -42,14 +35,21 @@
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5652261121690707,
+    "entry_threshold": 2.4999999999999996,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5652261121690707,
+    "entry_threshold": 2.0326130560845352,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.0326130560845352,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
@@ -70,21 +70,14 @@
     "sizing_by_zscore": true
   },
   {
-    "entry_threshold": 2.499327849008375,
+    "entry_threshold": 1.5006721509916257,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 2.499327849008375,
-    "exit_threshold": 1,
-    "sizing_by_zscore": true,
-    "ventana_betas": 252,
-    "ventana_zscore": 252
-  },
-  {
-    "entry_threshold": 2.4993401803778363,
+    "entry_threshold": 1.5006721509916257,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
@@ -98,14 +91,21 @@
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5657725049422582,
+    "entry_threshold": 2.4993401803778363,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5657725049422582,
+    "entry_threshold": 2.0325720703246843,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.0325720703246843,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
@@ -140,21 +140,14 @@
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5672564246208078,
+    "entry_threshold": 1.9675392407661054,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5672564246208078,
-    "exit_threshold": 1,
-    "sizing_by_zscore": true,
-    "ventana_betas": 252,
-    "ventana_zscore": 252
-  },
-  {
-    "entry_threshold": 2.490536806217637,
+    "entry_threshold": 1.9675392407661054,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
@@ -168,14 +161,21 @@
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5183703722489994,
+    "entry_threshold": 2.490536806217637,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
     "ventana_zscore": 252
   },
   {
-    "entry_threshold": 1.5183703722489994,
+    "entry_threshold": 2.0091851861244994,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.0091851861244994,
     "exit_threshold": 1,
     "sizing_by_zscore": true,
     "ventana_betas": 252,
