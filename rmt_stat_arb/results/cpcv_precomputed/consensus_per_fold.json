@@ -1,0 +1,212 @@
+[
+  {
+    "entry_threshold": 2.5,
+    "exit_threshold": 1.0,
+    "ventana_betas": 252,
+    "ventana_zscore": 252,
+    "sizing_by_zscore": true
+  },
+  {
+    "entry_threshold": 2.5,
+    "exit_threshold": 1.0,
+    "ventana_betas": 252,
+    "ventana_zscore": 252,
+    "sizing_by_zscore": true
+  },
+  {
+    "entry_threshold": 2.4950059675222263,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.4950059675222263,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.4999999999999996,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.4999999999999996,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5652261121690707,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5652261121690707,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.5,
+    "exit_threshold": 1.0,
+    "ventana_betas": 252,
+    "ventana_zscore": 252,
+    "sizing_by_zscore": true
+  },
+  {
+    "entry_threshold": 2.5,
+    "exit_threshold": 1.0,
+    "ventana_betas": 252,
+    "ventana_zscore": 252,
+    "sizing_by_zscore": true
+  },
+  {
+    "entry_threshold": 2.499327849008375,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.499327849008375,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.4993401803778363,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.4993401803778363,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5657725049422582,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5657725049422582,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.497426345198899,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.497426345198899,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.4975029837611133,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.4975029837611133,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5672564246208078,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5672564246208078,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.490536806217637,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.490536806217637,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5183703722489994,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 1.5183703722489994,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.5000000000000004,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.5000000000000004,
+    "exit_threshold": 1,
+    "sizing_by_zscore": true,
+    "ventana_betas": 252,
+    "ventana_zscore": 252
+  },
+  {
+    "entry_threshold": 2.5,
+    "exit_threshold": 1.0,
+    "ventana_betas": 252,
+    "ventana_zscore": 252,
+    "sizing_by_zscore": true
+  },
+  {
+    "entry_threshold": 2.5,
+    "exit_threshold": 1.0,
+    "ventana_betas": 252,
+    "ventana_zscore": 252,
+    "sizing_by_zscore": true
+  }
+]

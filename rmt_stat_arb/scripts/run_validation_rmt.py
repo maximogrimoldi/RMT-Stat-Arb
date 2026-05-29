@@ -70,7 +70,7 @@ _load_bt("strategy.estimator", "strategy/estimator.py")
 # Paso 4 — Motor CPCV (sin conflicto de nombres)
 from pipeline.config    import ValidationConfig
 from pipeline.cpcv      import CPCVConfig, CPCVEngine
-from pipeline.tuning    import build_nested_cpcv_runner
+from pipeline.tuning    import build_nested_cpcv_runner, tune_inner_is_segments, _fit_estimator
 from strategy.estimator import EventDrivenEstimator   # ya en sys.modules
 
 
@@ -94,6 +94,9 @@ class RMTStrategyPolars(RMTStrategy):
 
 # Residuos pre-computados compartidos entre todas las instancias de la corrida
 _RESIDUOS_PD: "pd.DataFrame | None" = None
+
+# Consensus params capturados por fold externo del CPCV
+_consensus_log: list[dict] = []
 
 
 class RMTStrategyPolarsPrecomputed(RMTStrategy):
@@ -179,6 +182,83 @@ def estimator_factory(params: dict) -> EventDrivenEstimator:
     )
 
 
+# ── Consensus logging ────────────────────────────────────────────────────────
+
+def _wrap_runner_with_consensus_log(original_runner):
+    """
+    Replica el closure del runner original capturando tuning.consensus_params
+    antes del del tuning. Preserva el atributo .precompute si existe.
+    """
+    freevars = original_runner.__code__.co_freevars
+    cells    = {name: cell.cell_contents
+                for name, cell in zip(freevars, original_runner.__closure__)}
+
+    _val_cfg           = cells["val_cfg"]
+    _grid              = cells["grid"]
+    _estimator_factory = cells["estimator_factory"]
+    _n_inner_splits    = cells["n_inner_splits"]
+    _score_fn          = cells["score_fn"]
+
+    def wrapped_runner(is_segments, oos_data):
+        tuning = tune_inner_is_segments(
+            is_segments=is_segments,
+            val_cfg=_val_cfg,
+            grid=_grid,
+            estimator_factory=_estimator_factory,
+            n_splits=_n_inner_splits,
+            score_fn=_score_fn,
+        )
+        params = tuning.consensus_params
+        _consensus_log.append(dict(params))
+
+        estimator = _estimator_factory(params)
+        try:
+            fitted   = _fit_estimator(estimator, is_segments)
+            returns, signals = fitted.predict(oos_data)
+            return returns, signals
+        finally:
+            del estimator
+            del tuning
+
+    wrapped_runner.precompute = getattr(original_runner, "precompute", None)
+    return wrapped_runner
+
+
+def aggregate_consensus(log: list[dict]) -> dict:
+    """
+    Agrega N consensus_params de los folds externos del CPCV.
+    Continuos: mediana. Discretos (sizing_by_zscore): moda; empate → primer
+    valor del PARAM_GRID (criterio determinístico).
+    """
+    import statistics as _st
+    if not log:
+        return {}
+
+    _discrete = {"sizing_by_zscore"}
+    result: dict = {}
+
+    for key in log[0].keys():
+        values = [fold[key] for fold in log if key in fold]
+        if not values:
+            continue
+        if key in _discrete:
+            counts: dict = {}
+            for v in values:
+                counts[v] = counts.get(v, 0) + 1
+            max_count  = max(counts.values())
+            candidates = {v for v, c in counts.items() if c == max_count}
+            # tie-break: primer valor de PARAM_GRID
+            for p in PARAM_GRID:
+                if p[key] in candidates:
+                    result[key] = p[key]
+                    break
+        else:
+            med = _st.median(values)
+            result[key] = int(round(med)) if all(isinstance(v, int) for v in values) else med
+
+    return result
+
+
 # ── Helpers de datos ──────────────────────────────────────────────────────────
 
 def _load_prices_polars() -> pl.DataFrame:
@@ -248,10 +328,12 @@ def main() -> None:
         n_inner_splits    = 4,
         precompute_fn     = _precompute_strat.precompute,
     )
+    runner = _wrap_runner_with_consensus_log(runner)
 
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)
     print("[*] Corriendo CPCV (puede tardar varios minutos)…")
     report = engine.run(data, runner=runner, market_data=mkt)
+    assert _RESIDUOS_PD is not None, "[ERROR] precompute no corrió — el hook no se enganchó"
 
     # ── Métricas ──────────────────────────────────────────────────────────────
     m = report.metrics
@@ -279,6 +361,40 @@ def main() -> None:
     ec_path = _RESULTS_DIR / "equity_curves_cpcv.parquet"
     ec_df.to_parquet(ec_path)
     print(f"\n[*] Equity curves guardadas en {ec_path}")
+
+    # ── Consenso por fold + parámetros óptimos ────────────────────────────────
+    import json
+
+    best = aggregate_consensus(_consensus_log)
+
+    print("\n" + "═"*52)
+    print(f"  CONSENSO POR FOLD ({len(_consensus_log)} folds del CPCV externo)")
+    print("═"*52)
+    for i, fold in enumerate(_consensus_log, 1):
+        print(f"  Fold {i:2d}: entry={fold.get('entry_threshold')}  "
+              f"exit={fold.get('exit_threshold')}  "
+              f"vb={fold.get('ventana_betas')}  "
+              f"vz={fold.get('ventana_zscore')}  "
+              f"sizing={'zscore' if fold.get('sizing_by_zscore') else 'equal'}")
+    print("═"*52)
+    print("  PARÁMETROS ÓPTIMOS PARA PAPER (agregación)")
+    print("  Regla: moda para discretos, mediana para continuos")
+    print("═"*52)
+    print(f"  entry_threshold   : {best.get('entry_threshold')}")
+    print(f"  exit_threshold    : {best.get('exit_threshold')}")
+    print(f"  ventana_betas     : {best.get('ventana_betas')}")
+    print(f"  ventana_zscore    : {best.get('ventana_zscore')}")
+    print(f"  sizing_by_zscore  : {best.get('sizing_by_zscore')}")
+    print("═"*52)
+
+    best_path  = _RESULTS_DIR / "best_params.json"
+    folds_path = _RESULTS_DIR / "consensus_per_fold.json"
+    with open(best_path,  "w") as f:
+        json.dump(best, f, indent=2)
+    with open(folds_path, "w") as f:
+        json.dump(_consensus_log, f, indent=2)
+    print(f"\n[*] best_params.json guardado en {best_path}")
+    print(f"[*] consensus_per_fold.json guardado en {folds_path}")
 
 
 if __name__ == "__main__":

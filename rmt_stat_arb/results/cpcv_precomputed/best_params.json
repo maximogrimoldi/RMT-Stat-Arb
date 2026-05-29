@@ -1,0 +1,7 @@
+{
+  "entry_threshold": 2.4975029837611133,
+  "exit_threshold": 1.0,
+  "ventana_betas": 252,
+  "ventana_zscore": 252,
+  "sizing_by_zscore": true
+}
