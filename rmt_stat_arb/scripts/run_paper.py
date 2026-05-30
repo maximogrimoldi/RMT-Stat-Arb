@@ -19,13 +19,10 @@ import sys
 from pathlib import Path
 
 # ── sys.path: este archivo vive en rmt_stat_arb/scripts/
-# Necesita rmt_stat_arb/codigo/ para strategy/engines/data
-# y rmt_stat_arb/ para monitoring.
+# rmt_stat_arb/ contiene strategy/, data/, engines/, monitoring/ directamente.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]   # → rmt_stat_arb/
-_CODIGO_DIR   = _PROJECT_ROOT / "codigo"
-for _p in [str(_CODIGO_DIR), str(_PROJECT_ROOT)]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import pandas as pd
 from data.ingest          import load_prices, download_prices, check_data_status

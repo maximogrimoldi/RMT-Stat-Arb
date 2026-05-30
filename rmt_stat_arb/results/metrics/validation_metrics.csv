@@ -1,2 +1,0 @@
-sharpe_mean,sharpe_std,psr,dsr,n_paths,consensus_params
-0.4508,0.2734,0.6127,0.6109,5,"{""entry_threshold"": 2.0, ""exit_threshold"": 1.0, ""ventana_betas"": 252, ""ventana_zscore"": 252, ""sizing_by_zscore"": false}"

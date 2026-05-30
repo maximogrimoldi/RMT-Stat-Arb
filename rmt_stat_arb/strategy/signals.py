@@ -111,17 +111,4 @@ class RMTStrategy:
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-    def test_adf(self, serie, significance=0.05):
-        """
-        Test Augmented Dickey-Fuller sobre el residuo acumulado de un ticker.
-        Devuelve (passed: bool, p_value: float).
-        passed=True → residuo estacionario → mean reversion tiene fundamento estadístico.
-        passed=False → no hay evidencia de reversión → operar con cautela.
-        """
-        from statsmodels.tsa.stattools import adfuller
-        serie_limpia = serie.dropna()
-        if len(serie_limpia) < 20:
-            return False, np.nan
-        p_value = float(adfuller(serie_limpia)[1])
-        return p_value < significance, round(p_value, 4)
 

@@ -19,10 +19,8 @@ import pandas as pd
 
 # ── sys.path ──────────────────────────────────────────────────────────────────
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]   # → rmt_stat_arb/
-_CODIGO_DIR   = _PROJECT_ROOT / "codigo"
-for _p in [str(_CODIGO_DIR), str(_PROJECT_ROOT)]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from data.ingest          import load_prices
 from data.universe        import UNIVERSE

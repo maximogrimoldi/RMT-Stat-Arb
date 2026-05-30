@@ -11,67 +11,51 @@ pd.DataFrame con DatetimeIndex. Lo resuelve RMTStrategyPolarsPrecomputed.
 """
 from __future__ import annotations
 
+import datetime
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import polars as pl
 
 # ── Rutas absolutas ───────────────────────────────────────────────────────────
 _SCRIPTS_DIR = Path(__file__).resolve().parent
-_RMT_ROOT    = _SCRIPTS_DIR.parent                 # → rmt_stat_arb/
-_CODIGO_DIR  = _RMT_ROOT / "codigo"               # RMTStrategy, data.*
-_BACKTESTER  = _RMT_ROOT.parent                    # motor CPCV (mismo repo)
+_RMT_ROOT    = _SCRIPTS_DIR.parent          # → rmt_stat_arb/
+_CPCV_DIR    = _RMT_ROOT.parent / "cpcv"   # → motor CPCV
 
-# ── Orden de importación — resuelve conflicto de namespace "strategy/" ────────
-#
-# Ambos repos tienen un paquete llamado "strategy/":
-#   codigo/strategy/     → core.py, signals.py
-#   Backtester/strategy/ → base.py, estimator.py
-#
-# Estrategia:
-#   1. Poner codigo/ PRIMERO en sys.path → "strategy" = paquete RMT.
-#   2. Añadir Backtester/ al FINAL de sys.path (pipeline.* no tienen conflicto).
-#   3. Inyectar los submodulos Backtester que el motor necesita (strategy.base,
-#      strategy.estimator) directamente en sys.modules via importlib antes de
-#      que se importen sus dependencias (engine.*).
-#   Resultado: pipeline.*, engine.* se resuelven en Backtester/;
-#              strategy.core se resuelve en codigo/;
-#              strategy.base y strategy.estimator son los de Backtester/.
+# ── sys.path ──────────────────────────────────────────────────────────────────
+# rmt_stat_arb/ primero → strategy.core, data.*, engines.*, monitoring.*
+# cpcv/ al final       → pipeline.*, engine.*, analysis.*
+# pipeline/, engine/, analysis/ ya no colisionan (solo existen en cpcv/).
+# strategy/ sigue colisionando (ambos dirs se llaman "strategy/"), pero el
+# inject es mínimo: solo strategy.base y strategy.estimator desde cpcv/.
+if str(_RMT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_RMT_ROOT))
+if str(_CPCV_DIR) not in sys.path:
+    sys.path.append(str(_CPCV_DIR))
 
-# Paso 1 — RMT
-if str(_CODIGO_DIR) not in sys.path:
-    sys.path.insert(0, str(_CODIGO_DIR))
-
-from strategy.core import RMTStrategy          # strategy → codigo/strategy/
+from strategy.core import RMTStrategy
 from data.ingest   import load_prices
 from data.universe import UNIVERSE
 
-# Paso 2 — Backtester al final (pipeline.*, engine.* sin conflicto)
-if str(_BACKTESTER) not in sys.path:
-    sys.path.append(str(_BACKTESTER))
+def _inject(name: str, path: Path) -> None:
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod  = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
 
-# Paso 3 — Inyectar submodulos Backtester bajo el namespace "strategy"
-def _load_bt(module_name: str, rel_path: str) -> None:
-    """Carga un archivo de Backtester y lo registra en sys.modules."""
-    if module_name in sys.modules:
-        return
-    spec = importlib.util.spec_from_file_location(
-        module_name, _BACKTESTER / rel_path
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = mod
-    spec.loader.exec_module(mod)
+_inject("strategy.base",      _CPCV_DIR / "strategy/base.py")
+_inject("strategy.estimator", _CPCV_DIR / "strategy/estimator.py")
 
-_load_bt("strategy.base",      "strategy/base.py")
-_load_bt("strategy.estimator", "strategy/estimator.py")
-
-# Paso 4 — Motor CPCV (sin conflicto de nombres)
 from pipeline.config    import ValidationConfig
 from pipeline.cpcv      import CPCVConfig, CPCVEngine
 from pipeline.tuning    import build_nested_cpcv_runner, tune_inner_is_segments, _fit_estimator
-from strategy.estimator import EventDrivenEstimator   # ya en sys.modules
+from strategy.estimator import EventDrivenEstimator
 
 
 # ── Helpers de conversión ─────────────────────────────────────────────────────
@@ -80,17 +64,6 @@ def _pl_to_pd(data: pl.DataFrame) -> pd.DataFrame:
     df = data.to_pandas().set_index("timestamp")
     df.index = pd.to_datetime(df.index)
     return df
-
-# ── Wrappers Polars → pandas ──────────────────────────────────────────────────
-
-class RMTStrategyPolars(RMTStrategy):
-    """
-    Para paper trading: recibe precios crudos, corre el pipeline completo.
-    El motor llama:  get_weights(history: pl.DataFrame, positions: dict)
-    """
-    def get_weights(self, data: pl.DataFrame, positions: dict) -> dict:
-        return super().get_weights(_pl_to_pd(data), current_positions=positions)
-
 
 # Residuos pre-computados compartidos entre todas las instancias de la corrida
 _RESIDUOS_PD: "pd.DataFrame | None" = None
@@ -141,7 +114,7 @@ PARAM_GRID: list[dict] = [
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 INITIAL_CAPITAL     = 100_000.0
-REBALANCE_FREQUENCY = "monthly"     # stat-arb rebalanceo mensual
+REBALANCE_FREQUENCY = "monthly"
 
 EXECUTION = dict(
     slippage_pct        = 0.001,
@@ -163,7 +136,8 @@ CPCV_CFG = CPCVConfig(
     n_test_groups = 2,
 )
 
-_RESULTS_DIR = _RMT_ROOT / "results" / "cpcv_precomputed"
+_RESULTS_DIR = _RMT_ROOT / "results"
+_N_INNER_SPLITS = 4
 
 
 # ── Estimator factory ─────────────────────────────────────────────────────────
@@ -247,7 +221,6 @@ def aggregate_consensus(log: list[dict]) -> dict:
                 counts[v] = counts.get(v, 0) + 1
             max_count  = max(counts.values())
             candidates = {v for v, c in counts.items() if c == max_count}
-            # tie-break: primer valor de PARAM_GRID
             for p in PARAM_GRID:
                 if p[key] in candidates:
                     result[key] = p[key]
@@ -264,7 +237,6 @@ def aggregate_consensus(log: list[dict]) -> dict:
 def _load_prices_polars() -> pl.DataFrame:
     """Carga prices.parquet (pandas) y lo convierte al formato que espera CPCVEngine."""
     prices_pd = load_prices()[UNIVERSE]
-    # reset_index mueve DatetimeIndex → columna; el nombre del índice es "Date" (yfinance)
     col_name  = prices_pd.index.name or "index"
     prices_pl = (
         pl.from_pandas(prices_pd.reset_index())
@@ -295,18 +267,45 @@ def _fetch_benchmark(start: str, end: str) -> pl.DataFrame | None:
         return None
 
 
+# ── Plot ──────────────────────────────────────────────────────────────────────
+
+def _plot_equity_curves(ec_df: pd.DataFrame, out_path: Path) -> None:
+    """Genera PNG con las N equity curves del CPCV (una línea por path)."""
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for path_id in sorted(ec_df["path"].unique()):
+        eq = ec_df[ec_df["path"] == path_id]["equity"].values
+        ax.plot(eq, label=f"Path {path_id}", linewidth=1.2)
+    ax.set_title("CPCV Equity Curves — RMT Stat-Arb", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Barra")
+    ax.set_ylabel("Equity ($)")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.85)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    (_RESULTS_DIR / "figures").mkdir(parents=True, exist_ok=True)
 
-    # ── Grid ─────────────────────────────────────────────────────────────────
+    # ── 1. Grid ───────────────────────────────────────────────────────────────
     print(f"\n[*] Grid RMT: {len(PARAM_GRID)} combinaciones")
     for i, p in enumerate(PARAM_GRID, 1):
         print(f"    {i}. entry={p['entry_threshold']}  exit={p['exit_threshold']}"
               f"  sizing={'zscore' if p['sizing_by_zscore'] else 'equal'}")
 
-    # ── Datos ─────────────────────────────────────────────────────────────────
+    # ── 2. CPCVConfig + n_inner_splits ────────────────────────────────────────
+    from pipeline.cpcv import n_paths as _n_paths
+    phi = _n_paths(CPCV_CFG.n_groups, CPCV_CFG.n_test_groups)
+    print(f"\n[*] CPCVConfig: n_groups={CPCV_CFG.n_groups}  n_test_groups={CPCV_CFG.n_test_groups}"
+          f"  →  φ={phi} paths")
+    print(f"[*] n_inner_splits={_N_INNER_SPLITS}  |  embargo_bars={VAL_CFG.embargo_bars}"
+          f"  |  rebalance={REBALANCE_FREQUENCY}")
+
+    # ── 3. Datos ──────────────────────────────────────────────────────────────
     print("\n[*] Cargando precios desde disco…")
     data = _load_prices_polars()
     print(f"[*] {data.shape[1] - 1} tickers × {len(data)} días "
@@ -318,25 +317,30 @@ def main() -> None:
     if mkt is not None:
         print(f"[*] Benchmark: {len(mkt)} días")
 
-    # ── CPCV ──────────────────────────────────────────────────────────────────
+    # ── 4. Runner + wrapper de consensus ──────────────────────────────────────
     print("\n[*] Construyendo runner nested CPCV…")
     _precompute_strat = RMTStrategyPolarsPrecomputed(**PARAM_GRID[0])
     runner = build_nested_cpcv_runner(
         val_cfg           = VAL_CFG,
         grid              = PARAM_GRID,
         estimator_factory = estimator_factory,
-        n_inner_splits    = 4,
+        n_inner_splits    = _N_INNER_SPLITS,
         precompute_fn     = _precompute_strat.precompute,
     )
     runner = _wrap_runner_with_consensus_log(runner)
 
+    # ── 5. Correr CPCV ────────────────────────────────────────────────────────
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)
     print("[*] Corriendo CPCV (puede tardar varios minutos)…")
     report = engine.run(data, runner=runner, market_data=mkt)
     assert _RESIDUOS_PD is not None, "[ERROR] precompute no corrió — el hook no se enganchó"
 
-    # ── Métricas ──────────────────────────────────────────────────────────────
-    m = report.metrics
+    # ── 6. Agregación de consensus ─────────────────────────────────────────────
+    best = aggregate_consensus(_consensus_log)
+
+    # ── 7. Bloque RESULTADO CPCV ──────────────────────────────────────────────
+    m  = report.metrics
+    mr = m.get("market_regression", {})
     print("\n" + "═"*52)
     print("  RESULTADO CPCV — RMT Stat-Arb")
     print("═"*52)
@@ -346,27 +350,12 @@ def main() -> None:
     print(f"  DSR               : {m['dsr']:.3f}")
     print(f"  Max Drawdown      : {m['max_drawdown']:.2%}")
     print(f"  % paths positivos : {m['pct_positive_paths']:.1%}")
-    if "market_regression" in m:
-        mr = m["market_regression"]
+    if mr:
         print(f"  Alpha (anual)     : {mr.get('alpha', float('nan')):.3f}")
         print(f"  Beta              : {mr.get('beta', float('nan')):.3f}")
     print("═"*52)
 
-    # ── Guardar equity curves ─────────────────────────────────────────────────
-    rows = []
-    for i, ec in enumerate(report.equity_curves, 1):
-        for row in ec.iter_rows(named=True):
-            rows.append({"path": i, "bar": row["bar"], "equity": row["equity"]})
-    ec_df = pd.DataFrame(rows)
-    ec_path = _RESULTS_DIR / "equity_curves_cpcv.parquet"
-    ec_df.to_parquet(ec_path)
-    print(f"\n[*] Equity curves guardadas en {ec_path}")
-
-    # ── Consenso por fold + parámetros óptimos ────────────────────────────────
-    import json
-
-    best = aggregate_consensus(_consensus_log)
-
+    # ── 8. Bloque CONSENSO POR FOLD ───────────────────────────────────────────
     print("\n" + "═"*52)
     print(f"  CONSENSO POR FOLD ({len(_consensus_log)} folds del CPCV externo)")
     print("═"*52)
@@ -377,6 +366,8 @@ def main() -> None:
               f"vz={fold.get('ventana_zscore')}  "
               f"sizing={'zscore' if fold.get('sizing_by_zscore') else 'equal'}")
     print("═"*52)
+
+    # ── 9. Bloque PARÁMETROS ÓPTIMOS ──────────────────────────────────────────
     print("  PARÁMETROS ÓPTIMOS PARA PAPER (agregación)")
     print("  Regla: moda para discretos, mediana para continuos")
     print("═"*52)
@@ -387,14 +378,76 @@ def main() -> None:
     print(f"  sizing_by_zscore  : {best.get('sizing_by_zscore')}")
     print("═"*52)
 
-    best_path  = _RESULTS_DIR / "best_params.json"
-    folds_path = _RESULTS_DIR / "consensus_per_fold.json"
-    with open(best_path,  "w") as f:
+    # ── 10. Guardar outputs ───────────────────────────────────────────────────
+
+    # equity_curves.parquet
+    rows = []
+    for i, ec in enumerate(report.equity_curves, 1):
+        for row in ec.iter_rows(named=True):
+            rows.append({"path": i, "bar": row["bar"], "equity": row["equity"]})
+    ec_df = pd.DataFrame(rows)
+    ec_path = _RESULTS_DIR / "equity_curves.parquet"
+    ec_df.to_parquet(ec_path)
+    print(f"\n[*] Equity curves guardadas en {ec_path}")
+
+    # best_params.json
+    best_path = _RESULTS_DIR / "best_params.json"
+    with open(best_path, "w") as f:
         json.dump(best, f, indent=2)
-    with open(folds_path, "w") as f:
-        json.dump(_consensus_log, f, indent=2)
-    print(f"\n[*] best_params.json guardado en {best_path}")
-    print(f"[*] consensus_per_fold.json guardado en {folds_path}")
+    print(f"[*] best_params.json guardado en {best_path}")
+
+    # diagnostico_grid (embebido en metrics.json)
+    entries = [d["entry_threshold"] for d in _consensus_log]
+    sizings = [d["sizing_by_zscore"]  for d in _consensus_log]
+    arr = np.array(entries)
+    diag = {
+        "entry_threshold": {
+            "min":    float(arr.min()),
+            "p25":    float(np.percentile(arr, 25)),
+            "median": float(np.median(arr)),
+            "p75":    float(np.percentile(arr, 75)),
+            "max":    float(arr.max()),
+            "distribution": {
+                "~1.5": sum(1 for v in entries if abs(v - 1.5) < 0.1),
+                "~2.0": sum(1 for v in entries if abs(v - 2.0) < 0.1),
+                "~2.5": sum(1 for v in entries if abs(v - 2.5) < 0.1),
+            },
+        },
+        "sizing_by_zscore": {
+            "True":  sum(sizings),
+            "False": len(sizings) - sum(sizings),
+        },
+    }
+
+    # metrics.json
+    metrics_out = {
+        "sharpe_mean":        m["sharpe_mean"],
+        "sharpe_std":         m["sharpe_std"],
+        "sharpes_per_path":   m["sharpes_per_path"],
+        "dsr":                m["dsr"],
+        "max_drawdown":       m["max_drawdown"],
+        "pct_positive_paths": m["pct_positive_paths"],
+        "alpha_annualized":   mr.get("alpha"),
+        "beta":               mr.get("beta"),
+        "n_paths":            m["phi"],
+        "n_combos":           m["n_combos"],
+        "embargo_bars":       VAL_CFG.embargo_bars,
+        "rebalance_frequency": REBALANCE_FREQUENCY,
+        "param_grid":         PARAM_GRID,
+        "consensus_per_fold": _consensus_log,
+        "diagnostico_grid":   diag,
+        "date_range":         [start, end],
+        "generated_at":       datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    metrics_path = _RESULTS_DIR / "metrics.json"
+    with open(metrics_path, "w") as f:
+        json.dump(metrics_out, f, indent=2)
+    print(f"[*] metrics.json guardado en {metrics_path}")
+
+    # figures/equity_curves.png
+    fig_path = _RESULTS_DIR / "figures" / "equity_curves.png"
+    _plot_equity_curves(ec_df, fig_path)
+    print(f"[*] Plot guardado en {fig_path}")
 
 
 if __name__ == "__main__":
