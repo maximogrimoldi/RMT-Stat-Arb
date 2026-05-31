@@ -13,6 +13,14 @@
   "pct_positive_paths": 0.4,
   "alpha_annualized": -0.012628495808145646,
   "beta": 0.033511926083358616,
+  "turnover_annual": 8.376809919998509,
+  "turnover_per_path": [
+    8.3338,
+    8.3875,
+    8.4549,
+    8.1332,
+    8.5747
+  ],
   "n_paths": 5,
   "n_combos": 15,
   "embargo_bars": 25,
@@ -291,9 +299,48 @@
       "False": 0
     }
   },
+  "stress_testing": {
+    "note": "4 PnL-side scenarios on the last OOS fold. Vol/liquidity shocks excluded due to precompute architecture (would require RMT model recalibration).",
+    "baseline": {
+      "sharpe": -0.5158291105868879,
+      "annualized_return": -0.07051521122953808,
+      "max_drawdown": -0.3034756282481123
+    },
+    "scenarios": [
+      {
+        "name": "Slippage 5x (50 bps)",
+        "sharpe": -0.9909140243773387,
+        "max_drawdown": -0.4273501326924956,
+        "annualized_return": -0.1246673520447038,
+        "delta_sharpe": -0.4750849137904508
+      },
+      {
+        "name": "Slippage 10x (100 bps)",
+        "sharpe": -1.4659989381677891,
+        "max_drawdown": -0.5324071255448922,
+        "annualized_return": -0.1756763584137353,
+        "delta_sharpe": -0.9501698275809013
+      },
+      {
+        "name": "Fee drag 5 bps/d\u00eda",
+        "sharpe": -1.513507429546835,
+        "max_drawdown": -0.5427756695015872,
+        "annualized_return": -0.18061147681097833,
+        "delta_sharpe": -0.9976783189599471
+      },
+      {
+        "name": "PnL crush 50%",
+        "sharpe": -0.5158291105868879,
+        "max_drawdown": -0.16139023363672625,
+        "annualized_return": -0.033977424440190696,
+        "delta_sharpe": 0.0
+      }
+    ],
+    "worst_case_scenario": "Fee drag 5 bps/d\u00eda"
+  },
   "date_range": [
     "2015-01-02",
     "2026-05-27"
   ],
-  "generated_at": "2026-05-30T05:48:42.282377+00:00"
+  "generated_at": "2026-05-31T18:40:31.621483+00:00"
 }

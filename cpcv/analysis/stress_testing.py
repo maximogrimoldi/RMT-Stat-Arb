@@ -219,16 +219,25 @@ def apply_pnl_drag(drag: float) -> PnLTransform:
     return transform
 
 
-def apply_slippage_bps(bps: float) -> PnLTransform:
+def apply_slippage_bps(bps: float, trades_per_year: int = 12, bars_per_year: int = 252) -> PnLTransform:
     """
-    Reduce el PnL de manera simetrica por slippage expresado en basis points.
-    """
+    Aplica slippage en bps por trade al PnL.
 
-    drag = abs(bps) / 10_000.0
+    El slippage se paga solo en los días de rebalanceo, no todos los días.
+    Como la serie de retornos no contiene información de qué barras son de trade,
+    asumimos `trades_per_year` rebalanceos uniformes en `bars_per_year` barras.
+    El drag total anual es bps × trades_per_year, distribuido proporcionalmente
+    sobre las barras: drag_por_barra = (bps × trades_per_year) / bars_per_year.
+
+    Para rebalanceo mensual (12 trades/año) con bars_per_year=252:
+      bps=50 → drag_por_barra ≈ 2.4 bps/día → drag anual ≈ 600 bps.
+    """
+    drag_anual     = abs(bps) * trades_per_year / 10_000.0
+    drag_por_barra = drag_anual / bars_per_year
 
     def transform(returns: pl.Series) -> pl.Series:
         arr = returns.to_numpy().astype(float)
-        adjusted = arr - np.sign(arr) * drag
+        adjusted = arr - drag_por_barra
         return pl.Series(returns.name, adjusted)
 
     return transform

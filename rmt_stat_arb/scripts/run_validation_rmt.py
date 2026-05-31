@@ -190,12 +190,14 @@ def _wrap_runner_with_consensus_log(original_runner):
         try:
             fitted   = _fit_estimator(estimator, is_segments)
             returns, signals = fitted.predict(oos_data)
+            wrapped_runner.last_turnover = getattr(fitted, "last_turnover", 0.0)
             return returns, signals
         finally:
             del estimator
             del tuning
 
-    wrapped_runner.precompute = getattr(original_runner, "precompute", None)
+    wrapped_runner.precompute     = getattr(original_runner, "precompute", None)
+    wrapped_runner.last_turnover  = 0.0
     return wrapped_runner
 
 
