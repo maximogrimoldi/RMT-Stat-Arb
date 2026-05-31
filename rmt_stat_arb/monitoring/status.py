@@ -1,5 +1,6 @@
 """
-show_status() — lectura read-only de daily_state.parquet.
+show_status()   — lectura read-only de daily_state.parquet.
+show_universe() — lista los 100 tickers del universo.
 No conecta a IBKR, no ejecuta órdenes.
 """
 import json
@@ -61,3 +62,38 @@ def show_status() -> None:
 
     except Exception as e:
         print(f"\n[ERROR] No se pudo leer el estado: {e}")
+
+
+def show_universe() -> None:
+    """Lista los 100 tickers del universo + metadata de datos disponibles."""
+    from data.universe import UNIVERSE
+    import pandas as pd
+
+    PRICES_PATH = Path(__file__).resolve().parents[1] / "data" / "storage" / "prices.parquet"
+
+    print("\n" + "═" * 51)
+    print(f"  UNIVERSO — {len(UNIVERSE)} tickers líquidos del S&P 500")
+    print("═" * 51)
+
+    sorted_tickers = sorted(UNIVERSE)
+    cols = 10
+    for i in range(0, len(sorted_tickers), cols):
+        row = sorted_tickers[i:i + cols]
+        print("  " + "  ".join(f"{t:<6}" for t in row))
+
+    print("═" * 51)
+    print(f"  Fuente            : Yahoo Finance (yfinance)")
+
+    if PRICES_PATH.exists():
+        try:
+            df = pd.read_parquet(PRICES_PATH)
+            start = df.index[0].date()
+            end   = df.index[-1].date()
+            print(f"  Período disponible: {start} → {end} ({len(df)} días)")
+        except Exception:
+            print(f"  Período disponible: prices.parquet existe pero no se pudo leer")
+    else:
+        print(f"  Período disponible: prices.parquet no descargado todavía")
+
+    print(f"  Total tickers     : {len(UNIVERSE)}")
+    print("═" * 51 + "\n")

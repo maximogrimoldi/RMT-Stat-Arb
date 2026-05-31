@@ -22,6 +22,11 @@ def cmd_status(args):
     show_status()
 
 
+def cmd_universe(args):
+    from monitoring.status import show_universe
+    show_universe()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="rmt",
@@ -35,7 +40,8 @@ def main():
     p_paper.add_argument("--force", action="store_true",
                          help="Saltea check de idempotencia (correr más de una vez por día)")
 
-    sub.add_parser("status", help="Muestra el estado actual del portfolio sin operar")
+    sub.add_parser("status",   help="Muestra el estado actual del portfolio sin operar")
+    sub.add_parser("universe", help="Lista los 100 tickers del universo y rango de datos disponibles")
 
     args = parser.parse_args()
     if args.command == "backtest":
@@ -44,6 +50,8 @@ def main():
         cmd_paper(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "universe":
+        cmd_universe(args)
 
 
 if __name__ == "__main__":

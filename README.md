@@ -30,61 +30,64 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Uso — CLI
+## Primer uso (end-to-end)
 
-El sistema se opera desde un único comando con 3 subcomandos:
-
-### `backtest` — Validación CPCV
-
-Corre la validación completa con CPCV anidado sobre el grid de hiperparámetros, calcula métricas de desempeño, genera el plot de equity curves, y agrega stress testing.
+Después de instalar, los pasos para arrancar de cero:
 
 ```bash
+# 1. Validar la estrategia (genera best_params.json)
 python -m rmt_stat_arb backtest
-```
 
-Outputs en `rmt_stat_arb/results/backtesting/`:
-- `equity_curves.parquet` — 5 trayectorias OOS reconstruidas
-- `metrics.json` — Sharpe, DSR, drawdown, % paths positivos, alpha/beta, grid, consenso por fold, stress testing
-- `best_params.json` — parámetros consensuados (usados después por `paper`)
-- `figures/equity_curves.png` — plot de las 5 curvas
+# 2. Abrir TWS de Interactive Brokers en modo paper trading (puerto 7497)
 
-### `paper` — Paper trading contra IBKR
-
-Lee los parámetros validados del backtest, conecta a TWS, calcula el rebalanceo y ejecuta órdenes. Pide confirmación humana antes de mandar las órdenes.
-
-```bash
+# 3. Ejecutar el primer rebalanceo paper
 python -m rmt_stat_arb paper
-```
 
-Pre-trade checks: datos frescos, TWS conectado, idempotencia (no rebalancea dos veces el mismo día).
-
-Para saltear la idempotencia (correr más de una vez al día):
-
-```bash
-python -m rmt_stat_arb paper --force
-```
-
-Post-trade: imprime capital actual, drawdown del mes, posiciones activas y 4 health checks (market-neutral, gross exposure, n posiciones, z-scores extremos).
-
-Outputs en `rmt_stat_arb/results/trading/`:
-- `daily_state.parquet` — historial completo de runs (append-only)
-- `orders_log.parquet` — historial de órdenes BUY/SELL
-
-### `status` — Estado actual del portfolio
-
-Muestra el estado del portfolio sin operar (read-only sobre `daily_state.parquet`).
-
-```bash
+# 4. Monitorear el estado en cualquier momento
 python -m rmt_stat_arb status
 ```
 
-Output: último run, capital actual, retorno acumulado, drawdown del mes, posiciones long y short.
+## CLI — Tabla de comandos
 
-## Flujo de trabajo típico
+| Quiero...                                   | Comando                               | Qué hace                                                                                          |
+|---------------------------------------------|---------------------------------------|---------------------------------------------------------------------------------------------------|
+| **Ejecutar un backtest**                    | `python -m rmt_stat_arb backtest`     | Corre la validación CPCV completa (≈30 segundos). Genera `metrics.json`, `equity_curves.parquet`, `best_params.json` y el plot. |
+| **Ver qué activos opera la estrategia**     | `python -m rmt_stat_arb universe`     | Lista los 100 tickers del S&P 500 que opera la estrategia y el rango de fechas de datos disponibles. |
+| **Conectarse al broker y operar (paper)**   | `python -m rmt_stat_arb paper`        | Lee `best_params.json`, conecta a TWS, calcula pesos, pide confirmación y ejecuta órdenes paper. |
+| **Operar más de una vez al mismo día**      | `python -m rmt_stat_arb paper --force`| Mismo que `paper` pero saltea el check de idempotencia.                                          |
+| **Monitorear el portafolio en tiempo real** | `python -m rmt_stat_arb status`       | Muestra capital actual, retorno acumulado, drawdown del mes y posiciones long/short activas.     |
 
-1. **Validar la estrategia**: `python -m rmt_stat_arb backtest` (~40 segundos)
-2. **Operar**: `python -m rmt_stat_arb paper` (con TWS abierto en paper mode, puerto 7497)
-3. **Monitorear**: `python -m rmt_stat_arb status` en cualquier momento
+## Detalle de cada comando
+
+### `backtest`
+
+Corre el motor CPCV de López de Prado con purge + embargo, calcula métricas (Sharpe, DSR, drawdown, turnover, alpha/beta vs S&P 500) y aplica 4 escenarios de stress testing sobre el último fold OOS.
+
+Outputs en `rmt_stat_arb/results/backtesting/`:
+- `metrics.json` — todas las métricas + diagnóstico del grid + resultados del stress
+- `equity_curves.parquet` — 5 trayectorias OOS reconstruidas (CPCV con n=6, k=2)
+- `best_params.json` — parámetros consensuados (usados por `paper`)
+- `figures/equity_curves.png` — plot con mean ± banda P10-P90
+
+### `paper`
+
+Antes de operar corre 3 checks (datos frescos, TWS conectado en `127.0.0.1:7497`, idempotencia diaria). Lee los parámetros validados, calcula el rebalanceo y pide confirmación humana antes de mandar órdenes.
+
+NAV trackeado con marking-to-market — aísla la sub-estrategia RMT del NAV total de IBKR (necesario si hay otras estrategias corriendo en la misma cuenta paper).
+
+Outputs en `rmt_stat_arb/results/trading/`:
+- `daily_state.parquet` — historial de runs (append-only): NAV, pesos, posiciones, z-scores
+- `orders_log.parquet` — historial de órdenes BUY/SELL ejecutadas
+
+Post-trade: 4 health checks (market-neutral, gross exposure, n posiciones, z-scores extremos) como warnings.
+
+### `status`
+
+Lectura read-only de `daily_state.parquet`. No conecta a IBKR. Muestra: último run, capital, retorno acumulado vs capital inicial, drawdown del mes, y posiciones long/short con sus pesos.
+
+### `universe`
+
+Lectura read-only del archivo de universo (`data/universe.py`) y de `data/storage/prices.parquet`. Lista los 100 tickers ordenados alfabéticamente en columnas y muestra el rango de fechas de datos disponibles localmente.
 
 ## Estrategia
 

@@ -7,17 +7,23 @@ Motor de backtesting event-driven, agnóstico a la estrategia, diseñado para va
 ## Arquitectura
 
 ```
-DataHandler → MarketEvent → Strategy → SignalEvent → Portfolio → OrderEvent → ExecutionHandler → FillEvent
-                 ↑_______________________________________________________________|
+EventLoop
+  └── por cada barra:
+        ├── execution_handler.fill_pending()        # fills pendientes del turno anterior
+        ├── [si día de rebalanceo]
+        │     ├── strategy.get_weights(history, positions)
+        │     ├── portfolio.on_weights(weights, prices, timestamp)  → OrderEvent en queue
+        │     └── execution_handler.on_order()  →  FillEvent en queue  →  portfolio.on_fill()
+        └── [si día normal]
+              └── portfolio.update_market(prices, timestamp)
 ```
 
 | Componente | Responsabilidad |
 |---|---|
-| `DataHandler` | Guardián del tiempo. Barrera estricta: imposible entregar datos del futuro. |
-| `Strategy` | Recibe datos, devuelve señales. No sabe en qué fold está. |
-| `PositionSizer` | Calcula la cantidad a operar dado el signal, equity y precio. Inyectable en Portfolio. |
-| `Portfolio` | Contabilidad y filtros de riesgo. Delega el sizing al `PositionSizer` inyectado. |
-| `ExecutionHandler` | Ejecución simulada con slippage y comisiones. Reemplazable por broker real. |
+| `EventLoop` | Cursor temporal. Itera barra a barra, llama a la estrategia en días de rebalanceo. Entre segmentos IS discontinuos, cierra todas las posiciones via `force_close()`. |
+| `Strategy` | Recibe el historial hasta la barra actual y el dict de posiciones abiertas. Devuelve `{ticker: peso_objetivo}` con signo (long > 0, short < 0). |
+| `Portfolio` | Contabilidad: reconcilia target weights con posición actual, genera OrderEvents, registra fills, expone `equity_curve` y `turnover_acum`. El sizing es directo: `qty = equity × weight / price`. |
+| `ExecutionHandler` | Simulación de fills con slippage porcentual, derechos de mercado y arancel ALYC. |
 
 El motor no implementa estrategias: las orquesta y valida.
 
@@ -46,12 +52,14 @@ BacktestRunner = Callable[[list[pl.DataFrame], pl.DataFrame], tuple[pl.Series, p
 ```python
 @dataclass
 class ValidationConfig:
-    bars_per_year: int = 252           # 252 diario | 52 semanal | 12 mensual
-    block_bootstrap_reps: int = 0      # 0 = off, 10_000 = recomendado
+    bars_per_year: int = 252            # 252 diario | 52 semanal | 12 mensual
+    block_bootstrap_reps: int = 0       # 0 = off, 10_000 = recomendado
     alpha_halflife_bars: int | None = None
-    label_horizon: int = 1             # barras de purging
-    embargo_pct: float = 0.01
-    n_trials: int = 1                  # para DSR
+    label_horizon: int = 1              # barras de purging
+    embargo_pct: float = 0.01           # fracción del fold a embargar (fallback)
+    embargo_bars: int | None = None     # barras absolutas; overridea embargo_pct si se setea
+    n_trials: int = 1                   # para DSR
+    half_life_days: float = 365.0       # decaimiento para consenso de hiperparámetros
 ```
 
 ---
@@ -67,67 +75,30 @@ CPCVConfig(n_groups=6, n_test_groups=2)
 # → C(6,2) = 15 backtests, φ = 5 trayectorias
 ```
 
-**Reporta**: `sharpes_per_path` (φ valores), media/std/p5 del Sharpe, `pct_positive_paths`, `sharpe_avg_path`, `psr_avg_path`, `max_drawdown`, DSR.
+**Reporta**: `sharpes_per_path` (φ valores), media/std/p5 del Sharpe, `pct_positive_paths`, `sharpe_avg_path`, `psr_avg_path`, `max_drawdown`, `annualized_return_avg`, DSR, `turnover_per_path`, `turnover_annual_mean`.
+
+---
+
+## Precompute hook
+
+Para estrategias cuyo cálculo de features es costoso (ej. RMT con descomposición rolling de matrices de correlación), `CPCVEngine.run()` ejecuta un hook opcional `runner.precompute(data)` una sola vez antes de los splits CPCV. El hook puede:
+
+- Pre-calcular features sobre todo el dataset (manteniendo causalidad estricta — la función rolling solo usa datos pasados).
+- Almacenar el resultado en un global de módulo o en estado compartido.
+- Devolver los datos sin modificar (o transformados) para el motor.
+
+Esto reduce el costo computacional de O(N × M) a O(N + M), donde N = barras y M = combinaciones × folds del CPCV anidado. Se conecta vía `build_nested_cpcv_runner(..., precompute_fn=...)`.
+
+---
 
 ## Tuning interno
 
-`validation/tuning.py` agrega el paso de seleccion de parametros:
+`pipeline/tuning.py` agrega el paso de selección de parámetros:
 
 - `tune_inner_is_segments(...)` usa solo `is_segments`;
 - `build_nested_cpcv_runner(...)` ejecuta el tuning, el fit externo y el predict externo;
-- `tune_flat_dataset(...)` queda como ruta de deployment para extraer parametros sobre todo el dataset;
+- `tune_flat_dataset(...)` queda como ruta de deployment para extraer parámetros sobre todo el dataset;
 - la salida de tuning no reemplaza al backtest final.
-
----
-
-## Position Sizing — PositionSizer
-
-El sizing está desacoplado del `Portfolio` en `strategy/sizing.py`.
-
-```python
-class PositionSizer(ABC):
-    def size(self, signal, equity, price, positions) -> float: ...
-
-class FixedFractionSizer(PositionSizer):
-    # quantity = equity * fraction / price
-```
-
-`Portfolio` recibe el sizer por constructor. `SimplePortfolio` es un wrapper de conveniencia que usa `FixedFractionSizer`:
-
-```python
-# Custom sizer:
-portfolio = Portfolio(queue, capital, sizer=MiKellySizer())
-
-# Equivalente al comportamiento anterior:
-portfolio = SimplePortfolio(queue, capital, position_pct=0.02)
-```
-
----
-
-## Series IS discontinuas — Hamilton (1994)
-
-En CPCV, los segmentos IS pueden ser no contiguos. Concatenarlos directamente corrompe modelos con memoria temporal (Kalman, ARIMA, state space).
-
-`validation/hamilton.py` provee `build_gapped_is()`:
-
-```python
-gapped = build_gapped_is(is_segments, full_data)
-# Retorna pl.DataFrame con is_observed: bool
-# is_observed=True  → barra IS real, aporta a la log-verosimilitud
-# is_observed=False → barra de gap, NaN en datos, solo propaga estado
-```
-
-Pasar `gapped["close"].to_numpy()` (con NaN) a `statsmodels.tsa.statespace.MLEModel` aplica el filtro de Kalman de Hamilton: freeze del update en gaps, propagación de covarianza, `L` acumulada solo sobre IS.
-
----
-
-## Módulos experimentales
-
-Hay archivos que existen en `validation/` pero no forman parte del pipeline activo:
-
-- `stress_testing.py`: capa genérica de stress testing sobre `BacktestRunner`, útil para shocks de data y PnL.
-
-Hoy esos módulos no se ejecutan desde el flujo principal y no afectan la validación CPCV.
 
 ---
 
@@ -147,6 +118,39 @@ PSR donde `SR*` se eleva al máximo esperado entre `n_trials` intentos. Penaliza
 
 ### Block Bootstrap
 Series sintéticas con bootstrap por bloques (longitud = `alpha_halflife_bars`). Preserva autocorrelación. Reporta `{mean, std, p5, p95}`. Si `p5 < 0`: resultado no robusto.
+
+---
+
+## Turnover tracking
+
+`Portfolio` acumula el turnover (`Σ |Δw_t|`) en cada llamada a `on_weights()`, expuesto como `portfolio.turnover_acum`. `EventDrivenEstimator.predict()` lo propaga como `last_turnover`, y `CPCVEngine` lo recoge por path y reporta:
+
+- `turnover_per_path` — lista de turnover acumulado por trayectoria OOS
+- `turnover_annual_mean` — turnover promedio anualizado (`Σ|Δw| × bars_per_year / len(returns)`)
+
+Útil para evaluar costos de transacción reales contra los simulados y para detectar overfitting (estrategias con turnover excesivo suelen estar sobre-ajustadas al ruido).
+
+---
+
+## Stress testing
+
+`analysis/stress_testing.py` forma parte del pipeline activo: se ejecuta automáticamente al final de `python -m rmt_stat_arb backtest`, sobre el último fold OOS del CPCV.
+
+Arquitectura genérica sobre `BacktestRunner`:
+
+- `StressScenario(name, is_transform, oos_transform, pnl_transform)` — composición de transformaciones.
+- `StressTester.run(is_segments, oos_data, runner, scenarios)` — devuelve `StressReport` con baseline y delta de métricas por escenario.
+
+Escenarios activos (4 PnL-side, agnósticos al modelo):
+
+| Escenario | Mecanismo |
+|---|---|
+| Slippage 5× (50 bps) | `apply_slippage_bps(50)` — drag por trade distribuido en barras |
+| Slippage 10× (100 bps) | `apply_slippage_bps(100)` |
+| Fee drag 5 bps/día | `apply_pnl_drag(0.0005)` — drag fijo por barra |
+| PnL crush 50% | `scale_pnl(0.5)` — escala retornos (Sharpe invariante) |
+
+Nota: escenarios de vol/correlaciones (volatility_shock, liquidity_shock) están disponibles pero no se ejecutan en el flujo principal porque con precompute los residuos RMT están fijos — el efecto se reduce a escalar el PnL. Requeriría recalibración del modelo factorial.
 
 ---
 
@@ -181,38 +185,38 @@ Un resultado es creíble para capital real cuando se cumplen **todas**:
 
 ## Prohibición de look-ahead bias
 
-- El `DataHandler` mantiene cursor temporal: imposible solicitar datos futuros.
-- Features calculados sobre ventanas cerradas (bar `t` usa datos hasta `t−1`).
+- `EventLoop` mantiene cursor temporal: en cada barra `t`, `strategy.get_weights()` recibe `segment.slice(0, t+1)` — solo pasado.
+- Features calculados sobre ventanas cerradas (barra `t` usa datos hasta `t−1`).
 - Parámetros del estimador congelados al final del IS.
 - Scaler/normalizer fiteado solo sobre IS.
-- Lookups externos indexados al día anterior.
+- El precompute hook precalcula rolling features con la misma garantía causal (ventana `[t-k, t-1]`).
 
 ---
 
 ## Estructura de archivos
 
 ```
+cpcv/
 ├── pipeline/
 │   ├── config.py          # ValidationConfig
 │   ├── cpcv.py            # CPCVConfig + CPCVEngine
 │   ├── splits.py          # make_groups, build_train_segments (purging/embargo)
-│   ├── tuning.py          # Grid tuning + consenso entre folds
-│   └── hamilton.py        # build_gapped_is() — series IS discontinuas con NaN gaps
+│   └── tuning.py          # Grid tuning + consenso entre folds + precompute hook
 ├── analysis/
-│   ├── metrics.py         # Sharpe, PSR, DSR, bootstrap, max_drawdown
-│   ├── plots.py           # plot_equity_vs_benchmark
-│   ├── report.py          # ValidationReport + plot_vs_spy()
+│   ├── metrics.py         # Sharpe, PSR, DSR, bootstrap, max_drawdown, market_regression
+│   ├── report.py          # ValidationReport
 │   └── stress_testing.py  # Stress testing genérico sobre BacktestRunner
 ├── engine/
-│   ├── events.py
-│   ├── data_handler.py
-│   ├── portfolio.py       # Portfolio(sizer) + SimplePortfolio
-│   ├── execution_handler.py
-│   └── event_loop.py
+│   ├── events.py          # OrderEvent, FillEvent
+│   ├── portfolio.py       # Portfolio — sizing directo + turnover tracking
+│   ├── execution_handler.py  # SimulatedExecutionHandler con slippage/comisiones
+│   └── event_loop.py      # Cursor temporal, rebalanceo por frecuencia, force_close entre IS
 ├── strategy/
 │   ├── base.py            # Strategy ABC
-│   └── sizing.py          # PositionSizer ABC + FixedFractionSizer
-└── examples/
-    ├── __init__.py
-    └── production_tuning.py  # script generico para tuning de deployment
+│   └── estimator.py       # EventDrivenEstimator — envuelve Strategy como FitPredictEstimator
+└── tests/
+    ├── test_cpcv.py
+    ├── test_metrics.py
+    ├── test_stress_testing.py
+    └── test_tuning.py
 ```

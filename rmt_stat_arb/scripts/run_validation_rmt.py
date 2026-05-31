@@ -14,9 +14,22 @@ from __future__ import annotations
 import datetime
 import importlib.util
 import json
+import logging
 import sys
+import warnings
 from math import comb as _comb
 from pathlib import Path
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*utcnow.*")
+# Pandas4Warning (yfinance usa Timestamp.utcnow deprecated en pandas 4)
+try:
+    import pandas as _pd
+    if hasattr(_pd.errors, "Pandas4Warning"):
+        warnings.filterwarnings("ignore", category=_pd.errors.Pandas4Warning)
+except Exception:
+    pass
+logging.getLogger("yfinance").setLevel(logging.ERROR)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -253,8 +266,10 @@ def _load_prices_polars() -> pl.DataFrame:
 def _fetch_benchmark(start: str, end: str) -> pl.DataFrame | None:
     try:
         import yfinance as yf
-        raw = yf.download("^GSPC", start=start, end=end,
-                          auto_adjust=True, progress=False)["Close"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            raw = yf.download("^GSPC", start=start, end=end,
+                              auto_adjust=True, progress=False)["Close"]
         raw = raw.reset_index()
         raw.columns = ["timestamp", "close"]
         return (
@@ -384,8 +399,8 @@ def main() -> None:
     print(f"    - Nested splits     : {_N_INNER_SPLITS}")
     print("═"*51)
 
-    # ── 4. Runner + wrapper de consensus ──────────────────────────────────────
-    print("\n[*] Construyendo runner nested CPCV…")
+    # ── 4+5. Runner + CPCV ───────────────────────────────────────────────────
+    print("\n[*] Construyendo runner + corriendo CPCV (≈30 segundos)…")
     _precompute_strat = RMTStrategyPolarsPrecomputed(**PARAM_GRID[0])
     runner = build_nested_cpcv_runner(
         val_cfg           = VAL_CFG,
@@ -396,9 +411,7 @@ def main() -> None:
     )
     runner = _wrap_runner_with_consensus_log(runner)
 
-    # ── 5. Correr CPCV ────────────────────────────────────────────────────────
     engine = CPCVEngine(VAL_CFG, CPCV_CFG)
-    print("[*] Corriendo CPCV (puede tardar varios minutos)…")
     report = engine.run(data, runner=runner, market_data=mkt)
     assert _RESIDUOS_PD is not None, "[ERROR] precompute no corrió — el hook no se enganchó"
 
@@ -423,19 +436,34 @@ def main() -> None:
         print(f"  Beta              : {mr.get('beta', float('nan')):.3f}")
     print("═"*52)
 
-    # ── 8. Bloque CONSENSO POR FOLD ───────────────────────────────────────────
-    print("\n" + "═"*52)
-    print(f"  CONSENSO POR FOLD ({len(_consensus_log)} folds del CPCV externo)")
-    print("═"*52)
-    for i, fold in enumerate(_consensus_log, 1):
-        print(f"  Fold {i:2d}: entry={fold.get('entry_threshold')}  "
-              f"exit={fold.get('exit_threshold')}  "
-              f"vb={fold.get('ventana_betas')}  "
-              f"vz={fold.get('ventana_zscore')}  "
-              f"sizing={'zscore' if fold.get('sizing_by_zscore') else 'equal'}")
-    print("═"*52)
+    # ── 8. Bloque CONSENSO (resumen compacto, detalle en metrics.json) ───────
+    _entries  = [d["entry_threshold"] for d in _consensus_log]
+    _sizings  = [d["sizing_by_zscore"]  for d in _consensus_log]
+    _arr_e    = np.array(_entries)
+    _n_folds  = len(_consensus_log)
+    _bins = {
+        "~1.5": sum(1 for v in _entries if abs(v - 1.5) < 0.1),
+        "~2.0": sum(1 for v in _entries if abs(v - 2.0) < 0.1),
+        "~2.5": sum(1 for v in _entries if abs(v - 2.5) < 0.1),
+    }
+    _n_true = sum(_sizings)
+    print("\n" + "═"*51)
+    print(f"  CONSENSO DE HIPERPARÁMETROS ({_n_folds} folds del CPCV)")
+    print("═"*51)
+    print("  entry_threshold:")
+    for _bin, _cnt in _bins.items():
+        print(f"    {_bin}: {_cnt} folds ({_cnt/_n_folds:.0%})")
+    print(f"    rango: [{_arr_e.min():.3f}, {_arr_e.max():.3f}]  "
+          f"mediana: {np.median(_arr_e):.3f}")
+    print("  sizing_by_zscore:")
+    print(f"    True : {_n_true} folds ({_n_true/_n_folds:.0%})")
+    print(f"    False: {_n_folds - _n_true} folds ({(_n_folds-_n_true)/_n_folds:.0%})")
+    print("  exit_threshold, ventana_betas, ventana_zscore: constantes (1.0, 252, 252)")
+    print("  (detalle fold-a-fold en metrics.json[\"consensus_per_fold\"])")
+    print("═"*51)
 
     # ── 9. Bloque PARÁMETROS ÓPTIMOS ──────────────────────────────────────────
+    print()
     print("  PARÁMETROS ÓPTIMOS PARA PAPER (agregación)")
     print("  Regla: moda para discretos, mediana para continuos")
     print("═"*52)

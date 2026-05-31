@@ -55,3 +55,67 @@ No cubre la estrategia, solo el motor de validación.
 - **Consenso de hiperparámetros ponderado por recencia**: en lugar de elegir los mejores hiperparámetros del fold IS más reciente, se promedian ponderando por `exp(-age/half_life_days)`. Reduce sensibilidad a un fold específico.
 
 - **Benchmark automático**: `main()` descarga el SP500 automáticamente para el período del dataset y calcula alpha/beta/R²/IR sin que el usuario tenga que pasarle nada. Si la descarga falla, las métricas se omiten sin romper el backtest.
+
+---
+
+# AI Log — Estrategia + Paper Trading + CLI (Juan)
+
+Registro de cómo se usó AI en el desarrollo de la estrategia RMT, el paper trading contra IBKR, y la integración del CLI. Complementa la sección anterior del motor.
+
+---
+
+## Tareas donde la AI fue útil
+
+- Implementar la matemática de RMT que yo entendía conceptualmente: Marchenko-Pastur, regresión OLS sobre factores, cálculo de residuos rolling.
+- Boilerplate de la conexión a IBKR vía `ibapi`: el callback pattern es feo y repetitivo.
+- Sintaxis de pandas/polars cuando convivían los dos formatos en distintas partes del pipeline.
+- Detectar bugs de magnitud y semántica cuando le pasé los outputs (slippage que mejoraba pérdidas, NAV calculado sin cash, turnover propagado a 0 por wrappers).
+- Refactorización estructural del repo: reorganizar `Backtester/cpcv/` + `rmt_stat_arb/` planos, cuando los imports se complicaron por colisiones de namespace `strategy/`.
+
+---
+
+## Tareas donde decidí no confiar en la AI
+
+- Contrato de la estrategia: que `get_weights(prices, current_positions)` sea estrictamente stateless. La AI tendía a sugerir mantener estado entre llamadas — yo lo bloqueé porque rompe la validación por CPCV.
+- Decisión de z-score empírico en vez de Ornstein-Uhlenbeck completo. La AI proponía implementar el OU con regresión AR(1) por seguir a Avellaneda-Lee al pie de la letra. Decidí dejar la versión simplificada (media y desvío muestral del residuo acumulado) porque el OU no agrega valor de señal en este universo y agrega parámetros sin validar.
+- Grid de hiperparámetros: la AI sugería ampliarlo a 12-18 combinaciones. Lo limité a 6 (3 entry thresholds × 2 sizing) para mantener CPCV honesto y evitar p-hacking — un grid grande con DSR penaliza el resultado.
+- Cuándo ampliar el grid después de ver resultados. Mantuve la regla: solo amplío si el tuner converge al borde del grid (diagnóstico ex-ante), nunca para mejorar el Sharpe (eso sería p-hacking que el DSR captura).
+- Sacar el stop loss del flujo de paper trading: decisión propia, asumiendo el riesgo. La AI me advirtió varias veces pero la decisión fue mía.
+
+---
+
+## Errores de la AI por fase
+
+### Paper trading (refactor inicial)
+
+**NAV calculado sin cash**: la primera versión del NAV en `PaperEngine.execute()` sumaba `qty × precio` de las posiciones IBKR. Para una estrategia long/short equilibrada, longs y shorts se cancelan y el resultado da cerca de cero. Fix: cálculo con marking-to-market — `NAV_hoy = NAV_ayer × (1 + Σ peso × ret_diario)`, persistido en `daily_state.parquet`, que aísla el P&L de la sub-estrategia RMT de cualquier otra posición en la cuenta IBKR.
+
+**Stop loss y daily_state propuestos por defecto**: el primer diseño de paper engine reproducía la estructura completa de DQI (long-only) sin adaptar a long/short. Mucho de eso era innecesario para una sub-estrategia chica. Lo simplifiqué: cuatro health checks como warnings (market-neutral, gross, n_pos, z-scores extremos), sin SL, sin lógica de HOLD/REBALANCE.
+
+### Stress testing (último fold)
+
+**Slippage al revés**: la función `apply_slippage_bps` de Maxi (que la AI heredó sin chequear) usaba `arr - sign(arr) * drag`. Eso suma drag a retornos negativos (porque `-(-1 × drag) = +drag`), por lo que slippage "mejoraba" las pérdidas. Lo detecté cuando el escenario "Slippage 10x" daba Sharpe positivo, lo cual es físicamente imposible. Fix: `arr - drag_por_barra`, con drag distribuido proporcionalmente entre barras asumiendo 12 trades/año (rebalanceo mensual).
+
+**Turnover propagado a 0 por wrapper**: cuando Maxi pusheó el tracking de turnover, mi `run_validation_rmt.py` tenía un wrapper `_wrap_runner_with_consensus_log` que reimplementaba la lógica del runner base sin propagar `last_turnover`. La AI escribió el wrapper inicial y se olvidó del attribute passthrough. Resultado: turnover siempre 0.0. Fix de dos líneas en `tuning.py` y `run_validation_rmt.py`.
+
+### Validación
+
+**`oos_transform` redundante con precompute**: la AI propuso 5 escenarios de stress incluyendo `volatility_shock(1.5)` y `liquidity_shock(0.7)` que transforman precios. Pero con precompute los residuos RMT se calculan una vez sobre datos originales — escalar precios en OOS no recomputa la dinámica de factores. El efecto neto es matemáticamente equivalente a escalar el PnL. Detecté la redundancia al razonarlo. Decisión: eliminar esos dos escenarios, quedarme con 4 PnL-side honestos (slippage 5x/10x, fee drag, PnL crush) y documentar la limitación arquitectónica.
+
+---
+
+## Decisiones de diseño que tomé yo, no la AI
+
+- **Contrato stateless absoluto**: `get_weights(prices, current_positions, current_bar_date, return_diagnostics)` no guarda nada entre llamadas. Documentado explícitamente en `CONTRATO.md`. Es lo que valida el CPCV: si la estrategia tuviera estado interno, el resultado dependería del orden en que se ejecutan los folds.
+
+- **Precompute hook para residuos RMT**: en lugar de recalcular `calcular_residuos_rolling` en cada llamada a `get_weights()` (que pasaría 15 combos × 4 inner splits × 6 outer combos × ~2400 barras = millones de cálculos redundantes), defino `RMTStrategyPolarsPrecomputed.precompute()` que corre una vez sobre todo el dataset y guarda los residuos en un global. Reduce el costo del CPCV de ~100 minutos a ~30 segundos. Causalidad estricta preservada: los residuos del día `t` solo usan datos `[t-252, t)`.
+
+- **Embargo 25 barras según LdP**: una corrida inicial daba Sharpe positivo con `embargo_bars=4`. Al revisar AFML cap. 7 noté que López de Prado recomienda `embargo = 1% del dataset total` (no del grupo de test). Cambio a 25 barras → Sharpe pasó a negativo, DSR a 0. Aceptado como número honesto. La corrida anterior estaba contaminada por leakage temporal.
+
+- **Sin estimación de Ornstein-Uhlenbeck**: el documento de la estrategia originalmente describía Avellaneda-Lee con OU completo (estimar κ, θ, σ por AR(1) y normalizar con σ_eq = σ/√(2κ)). El código nunca hizo eso — usé z-score empírico desde el principio. En la corrida final mantuve la versión simple porque agregar OU no aporta señal en este universo y dispara la complejidad.
+
+- **CLI integrado en vez de scripts sueltos**: dos scripts en `scripts/` (`run_validation_rmt.py`, `run_paper.py`) no transmiten profesionalismo. Armé `python -m rmt_stat_arb {backtest|paper|status|universe}` con `argparse` para que el sistema se opere desde un punto de entrada único, alineado con lo que pide la consigna sobre framework usable.
+
+- **Stress testing 4 escenarios PnL-side**: decisión consciente de excluir shocks de volatilidad/correlaciones porque la arquitectura de precompute los reduce a escalado de PnL. Documentado en el código y en el output del backtest. Trabajo futuro: recalibrar el modelo factorial con datos perturbados para un stress genuino.
+
+- **Marking-to-market vs NetLiquidation de IBKR**: el NAV de IBKR es el de toda la cuenta paper, que puede tener DQI u otras estrategias corriendo en paralelo. Para aislar la sub-estrategia RMT trackeo NAV internamente vía `daily_state.parquet`. Cada run actualiza con `NAV_hoy = NAV_ayer × (1 + ret_portafolio_diario)`. Funciona con pesos negativos por el dot product con signo.
