@@ -18,10 +18,19 @@ class Portfolio:
         self._positions: dict[str, float] = {}
         self._latest_prices: dict[str, float] = {}
         self._equity_curve: list[float] = []
+        self._turnover_acum: float = 0.0
+        self._last_target_weights: dict[str, float] = {}
 
     def on_weights(self, weights: dict[str, float], prices: dict[str, float], timestamp) -> None:
         self._latest_prices.update(prices)
         self._equity_curve.append(self.equity)
+
+        delta_total = sum(
+            abs(weights.get(t, 0.0) - self._last_target_weights.get(t, 0.0))
+            for t in set(weights) | set(self._last_target_weights)
+        )
+        self._turnover_acum += delta_total
+        self._last_target_weights = dict(weights)
 
         for symbol, target_weight in weights.items():
             price = prices.get(symbol, 0.0)
@@ -87,6 +96,10 @@ class Portfolio:
         self._positions[symbol] = 0
         if self._equity_curve:
             self._equity_curve[-1] = self.equity
+
+    @property
+    def turnover_acum(self) -> float:
+        return self._turnover_acum
 
     @property
     def equity(self) -> float:

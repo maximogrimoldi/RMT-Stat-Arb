@@ -85,8 +85,8 @@ class CPCVEngine:
 
         all_combos = list(_combinations(range(n), k))
 
-        # (returns, timestamps) por grupo y combinación
-        group_results: dict[int, dict[tuple, tuple[pl.Series, list]]] = {i: {} for i in range(n)}
+        # (returns, timestamps, turnover_acum) por grupo y combinación
+        group_results: dict[int, dict[tuple, tuple[pl.Series, list, float]]] = {i: {} for i in range(n)}
         for combo in all_combos:
             test_set   = set(combo)
             train_segs = self._get_train_segments(groups, test_set)
@@ -96,13 +96,21 @@ class CPCVEngine:
                 rets, _ = runner(train_segs, groups[group_idx])
                 # timestamps[1:] alinea con los retornos (pct_change descarta la primera barra)
                 timestamps = groups[group_idx]["timestamp"].to_list()[1:][:len(rets)]
-                group_results[group_idx][combo] = (rets, timestamps)
+                turnover   = getattr(runner, "last_turnover", 0.0)
+                group_results[group_idx][combo] = (rets, timestamps, turnover)
 
-        paths_returns, paths_timestamps = self._reconstruct_paths(group_results, all_combos, n, phi)
+        paths_returns, paths_timestamps, paths_turnovers = self._reconstruct_paths(group_results, all_combos, n, phi)
         self.paths_returns = paths_returns
 
         if not paths_returns:
             raise RuntimeError("No se pudieron reconstruir trayectorias OOS.")
+
+        # ── turnover anualizado por path ──────────────────────────────────────
+        bpy = self._cfg.bars_per_year
+        turnover_per_path = [
+            to / (len(r) / bpy) if len(r) > 0 else 0.0
+            for to, r in zip(paths_turnovers, paths_returns)
+        ]
 
         # ── equity curves ────────────────────────────────────────────────────
         equity_curves = []
@@ -111,7 +119,6 @@ class CPCVEngine:
             equity_curves.append(pl.DataFrame({"bar": list(range(len(equity))), "equity": equity}))
 
         # ── métricas ─────────────────────────────────────────────────────────
-        bpy     = self._cfg.bars_per_year
         sharpes = [sharpe_ratio(r, bpy) for r in paths_returns]
 
         min_len     = min(len(r) for r in paths_returns)
@@ -132,6 +139,8 @@ class CPCVEngine:
             "max_drawdown":         max_drawdown(avg_returns),
             "annualized_return_avg": annualized_return(avg_returns, bpy),
             "dsr":                   deflated_sharpe_ratio(avg_returns, self._cfg.n_trials, bars_per_year=bpy),
+            "turnover_per_path":    [round(t, 4) for t in turnover_per_path],
+            "turnover_annual_mean": float(np.mean(turnover_per_path)),
         }
 
         if self._cfg.block_bootstrap_reps > 0:
@@ -188,24 +197,27 @@ class CPCVEngine:
 
     def _reconstruct_paths(
         self,
-        group_results: dict[int, dict[tuple, tuple[pl.Series, list]]],
+        group_results: dict[int, dict[tuple, tuple[pl.Series, list, float]]],
         all_combos: list[tuple],
         n: int,
         phi: int,
-    ) -> tuple[list[pl.Series], list[list]]:
-        paths_rets: list[list[pl.Series]] = [[] for _ in range(phi)]
-        paths_ts:   list[list[list]]      = [[] for _ in range(phi)]
+    ) -> tuple[list[pl.Series], list[list], list[float]]:
+        paths_rets:     list[list[pl.Series]] = [[] for _ in range(phi)]
+        paths_ts:       list[list[list]]      = [[] for _ in range(phi)]
+        paths_to:       list[list[float]]     = [[] for _ in range(phi)]
 
         for group_idx in range(n):
             combos_with_group = sorted(c for c in all_combos if group_idx in c)
             for p, combo in enumerate(combos_with_group):
                 if combo not in group_results.get(group_idx, {}):
                     continue
-                rets, ts = group_results[group_idx][combo]
+                rets, ts, to = group_results[group_idx][combo]
                 paths_rets[p].append(rets)
                 paths_ts[p].append(ts)
+                paths_to[p].append(to)
 
         valid = [i for i, segs in enumerate(paths_rets) if segs and all(len(s) > 0 for s in segs)]
         returns    = [pl.concat(paths_rets[i]) for i in valid]
         timestamps = [[t for seg in paths_ts[i] for t in seg] for i in valid]
-        return returns, timestamps
+        turnovers  = [sum(paths_to[i]) for i in valid]
+        return returns, timestamps, turnovers

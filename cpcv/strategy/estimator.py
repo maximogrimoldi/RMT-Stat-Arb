@@ -54,6 +54,11 @@ class EventDrivenEstimator:
                          rebalance_frequency=self._rebalance_frequency)
         loop.run()
 
+        self._last_turnover: float = portfolio.turnover_acum
         returns = portfolio.returns_series
         signals = pl.Series("signals", [1.0] * len(returns))
         return returns, signals
+
+    @property
+    def last_turnover(self) -> float:
+        return getattr(self, "_last_turnover", 0.0)

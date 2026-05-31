@@ -409,10 +409,12 @@ def build_nested_cpcv_runner(
         try:
             fitted_estimator = _fit_estimator(estimator, is_segments)
             returns, signals = fitted_estimator.predict(oos_data)
+            runner.last_turnover = getattr(fitted_estimator, "last_turnover", 0.0)
             return returns, signals
         finally:
             del estimator
             del tuning
 
     runner.precompute = precompute_fn
+    runner.last_turnover = 0.0
     return runner

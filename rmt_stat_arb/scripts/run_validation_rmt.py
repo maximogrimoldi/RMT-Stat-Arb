@@ -349,6 +349,7 @@ def main() -> None:
     print(f"  Sharpe std        : {m['sharpe_std']:.3f}")
     print(f"  DSR               : {m['dsr']:.3f}")
     print(f"  Max Drawdown      : {m['max_drawdown']:.2%}")
+    print(f"  Turnover anual    : {m['turnover_annual_mean']:.2f}x")
     print(f"  % paths positivos : {m['pct_positive_paths']:.1%}")
     if mr:
         print(f"  Alpha (anual)     : {mr.get('alpha', float('nan')):.3f}")
