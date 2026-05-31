@@ -1,38 +1,28 @@
-# Backtester — RMT Stat-Arb
+# RMT Stat-Arb
 
-Motor de backtesting event-driven con validación CPCV (Combinatorial Purged Cross-Validation) y estrategia de arbitraje estadístico basada en Random Matrix Theory.
+Estrategia de Statistical Arbitrage basada en Random Matrix Theory (RMT) sobre 100 acciones líquidas del S&P 500.
 
-Proyecto compartido: Maximo Grimoldi (motor CPCV) + Juan Cruz Albamonte (estrategia RMT).
+Proyecto del curso de Ingeniería Financiera (F414) — Universidad de San Andrés, 2026.
 
----
-
-## Estructura
+## Estructura del repositorio
 
 ```
 Backtester/
-├── cpcv/                        # Motor de validación (Maxi)
-│   ├── pipeline/                #   CPCVEngine, splits, tuning, config
-│   ├── engine/                  #   EventLoop, Portfolio, ExecutionHandler
-│   ├── analysis/                #   Métricas: Sharpe, DSR, PSR, drawdown, bootstrap
-│   ├── strategy/                #   Interfaz base + EventDrivenEstimator
-│   ├── tests/                   #   Tests del motor
-│   └── examples/                #   Ejemplos de uso
-│
-└── rmt_stat_arb/                # Estrategia RMT Stat-Arb (Juan)
-    ├── strategy/                #   RMTStrategy (core.py) + pipeline RMT (signals.py)
-    ├── data/                    #   Ingest de precios, universo de 100 tickers
-    ├── engines/                 #   PaperEngine (paper trading) + IBKRClient (live)
-    ├── monitoring/              #   Health checks pre-trade
-    ├── scripts/
-    │   ├── run_validation_rmt.py  # Backtest CPCV completo
-    │   ├── run_paper.py           # Paper trading orquestador
-    │   └── smoke_test_paper.py    # Tests del flujo de paper trading
-    └── results/                 #   Outputs del backtest (generados al correr)
+├── cpcv/                    Motor de backtesting CPCV (Combinatorial Purged Cross-Validation)
+└── rmt_stat_arb/            Estrategia RMT
+    ├── data/                Ingesta y universo de tickers
+    ├── strategy/            Lógica RMT (signals + core)
+    ├── engines/             Conexión IBKR + paper trading
+    ├── monitoring/          Health checks + comando status
+    ├── scripts/             Scripts internos invocados por el CLI
+    └── results/
+        ├── backtesting/     Outputs del CPCV (equity curves, métricas, mejores parámetros)
+        └── trading/         Outputs de paper trading (daily state, orders log)
 ```
 
----
+## Instalación
 
-## Setup
+Requiere Python 3.11+ y TWS (Trader Workstation) de Interactive Brokers para paper trading.
 
 ```bash
 python3 -m venv .venv
@@ -40,75 +30,89 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
----
+## Uso — CLI
 
-## Correr el backtest CPCV
+El sistema se opera desde un único comando con 3 subcomandos:
 
-```bash
-source .venv/bin/activate
-python rmt_stat_arb/scripts/run_validation_rmt.py
-```
+### `backtest` — Validación CPCV
 
-**Outputs generados en `rmt_stat_arb/results/`:**
-
-| Archivo | Contenido |
-|---|---|
-| `equity_curves.parquet` | 5 paths OOS × ~2860 barras |
-| `best_params.json` | Parámetros consensuados para paper trading |
-| `metrics.json` | Sharpe, DSR, drawdown, alpha/beta, consensus por fold, grid |
-| `figures/equity_curves.png` | Plot de las 5 curvas de equity |
-
----
-
-## Resultados — corrida final (embargo LdP-compliant)
-
-Configuración: CPCV N=6, k=2 → φ=5 paths. Universo: 100 tickers S&P500. Período: 2015–2026. Embargo: 25 barras (≈1% del dataset, per LdP AFML cap.12).
-
-| Métrica | Valor |
-|---|---|
-| Sharpe medio | −0.108 |
-| Sharpe std | 0.159 |
-| DSR | 0.000 |
-| Max Drawdown | −38.44% |
-| % paths positivos | 40% |
-| Alpha anualizado | −0.013 |
-| Beta vs S&P500 | 0.034 |
-
-**Parámetros óptimos (consenso de 30 folds):**
-`entry_threshold=2.497`, `exit_threshold=1.0`, `sizing_by_zscore=True`, `ventana=252 días`.
-
----
-
-## Arquitectura técnica
-
-### Motor CPCV (`cpcv/`)
-
-Pipeline de validación con dos capas:
-
-1. **CPCV externo** — C(6,2)=15 combinaciones de splits, reconstruye φ=5 trayectorias OOS independientes.
-2. **Tuning interno** — dentro de cada IS, grid search con 4 splits cronológicos internos. Consenso ponderado por recencia (`half_life=365 días`).
-
-### Estrategia RMT (`rmt_stat_arb/`)
-
-Stateless: `get_weights(prices, positions) → {ticker: weight}`. Mismos inputs → mismos outputs siempre.
-
-Pipeline matemático:
-1. Retornos diarios → matriz de correlación (ventana rolling 252 días)
-2. PCA + filtro Marchenko-Pastur → elimina autovalores bajo λ_max (ruido Wishart)
-3. Regresión → residuos idiosincrásicos por ticker
-4. Z-score sobre residuos acumulados → señal de reversión a la media
-5. Entry si `|z| > threshold`, exit si `|z| < exit_threshold`
-
-Precompute: `calcular_residuos_rolling` corre **una sola vez** sobre el dataset completo antes del CPCV. Los slices temporales usan la matriz pre-computada, eliminando el warmup por fold.
-
-### Nota de imports
-
-`rmt_stat_arb/strategy/` y `cpcv/strategy/` comparten el mismo nombre de paquete. `run_validation_rmt.py` resuelve la colisión con un inject mínimo de `importlib` para `strategy.estimator` y `strategy.base` desde `cpcv/`. Ver comentarios en el script.
-
----
-
-## Tests
+Corre la validación completa con CPCV anidado sobre el grid de hiperparámetros, calcula métricas de desempeño, genera el plot de equity curves, y agrega stress testing.
 
 ```bash
-cd cpcv && python -m pytest tests/ -v
+python -m rmt_stat_arb backtest
 ```
+
+Outputs en `rmt_stat_arb/results/backtesting/`:
+- `equity_curves.parquet` — 5 trayectorias OOS reconstruidas
+- `metrics.json` — Sharpe, DSR, drawdown, % paths positivos, alpha/beta, grid, consenso por fold, stress testing
+- `best_params.json` — parámetros consensuados (usados después por `paper`)
+- `figures/equity_curves.png` — plot de las 5 curvas
+
+### `paper` — Paper trading contra IBKR
+
+Lee los parámetros validados del backtest, conecta a TWS, calcula el rebalanceo y ejecuta órdenes. Pide confirmación humana antes de mandar las órdenes.
+
+```bash
+python -m rmt_stat_arb paper
+```
+
+Pre-trade checks: datos frescos, TWS conectado, idempotencia (no rebalancea dos veces el mismo día).
+
+Para saltear la idempotencia (correr más de una vez al día):
+
+```bash
+python -m rmt_stat_arb paper --force
+```
+
+Post-trade: imprime capital actual, drawdown del mes, posiciones activas y 4 health checks (market-neutral, gross exposure, n posiciones, z-scores extremos).
+
+Outputs en `rmt_stat_arb/results/trading/`:
+- `daily_state.parquet` — historial completo de runs (append-only)
+- `orders_log.parquet` — historial de órdenes BUY/SELL
+
+### `status` — Estado actual del portfolio
+
+Muestra el estado del portfolio sin operar (read-only sobre `daily_state.parquet`).
+
+```bash
+python -m rmt_stat_arb status
+```
+
+Output: último run, capital actual, retorno acumulado, drawdown del mes, posiciones long y short.
+
+## Flujo de trabajo típico
+
+1. **Validar la estrategia**: `python -m rmt_stat_arb backtest` (~40 segundos)
+2. **Operar**: `python -m rmt_stat_arb paper` (con TWS abierto en paper mode, puerto 7497)
+3. **Monitorear**: `python -m rmt_stat_arb status` en cualquier momento
+
+## Estrategia
+
+La estrategia opera residuos idiosincrásicos de un modelo factorial RMT:
+
+1. Calcula la matriz de correlación de los retornos diarios.
+2. Aplica el umbral de Marchenko-Pastur para separar factores significativos del ruido.
+3. Regresiona los retornos contra los factores y obtiene los residuos.
+4. Calcula un z-score empírico (media y desvío de la ventana) sobre el residuo acumulado.
+5. Abre long si `z < -entry_threshold`, short si `z > +entry_threshold`.
+6. Cierra cuando `|z| < exit_threshold` o cuando el z cruza al lado opuesto.
+
+Es **stateless**: `get_weights(prices, current_positions)` devuelve siempre los mismos pesos dados los mismos inputs. Esto es lo que valida la metodología CPCV.
+
+## Referencias
+
+- López de Prado, M. (2018). *Advances in Financial Machine Learning*. Wiley. (Cap. 7-8, 12: CPCV, DSR, purge + embargo)
+- Avellaneda, M., & Lee, J.H. (2010). *Statistical Arbitrage in the U.S. Equities Market*. Quantitative Finance, 10(7).
+- Bun, J., Bouchaud, J.P., & Potters, M. (2017). *Cleaning large correlation matrices: tools from Random Matrix Theory*. Physics Reports, 666.
+- Cartea, Á., Cucuringu, M., & Jin, Q. (2023). *Correlation Matrix Clustering for Statistical Arbitrage Portfolios*.
+
+## Documentación adicional
+
+- `AI_LOG.md` — Registro del uso de herramientas de IA en el desarrollo del motor
+- `BACKTESTING.md` — Arquitectura del motor de backtesting (CPCV)
+
+## Autores
+
+- Juan Albamonte — Estrategia RMT
+- Maximiliano Grimoldi — Motor de backtesting CPCV
+- Quinto Adoquín — Documentación académica

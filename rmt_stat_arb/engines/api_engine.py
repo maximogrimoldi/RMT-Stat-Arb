@@ -65,6 +65,28 @@ class _PositionsWrapper(EClient, _SuppressInfoErrors):
         self._done = True
 
 
+class _AccountValueWrapper(EClient, _SuppressInfoErrors):
+    """Recibe el resumen de cuenta (NetLiquidation) desde TWS."""
+    def __init__(self):
+        EClient.__init__(self, self)
+        self.ready  = False
+        self.nav    = math.nan
+        self._done  = False
+
+    def nextValidId(self, orderId):
+        self.ready = True
+
+    def accountSummary(self, reqId, account, tag, value, currency):
+        if tag == "NetLiquidation":
+            try:
+                self.nav = float(value)
+            except ValueError:
+                pass
+
+    def accountSummaryEnd(self, reqId):
+        self._done = True
+
+
 # ── Cliente principal ─────────────────────────────────────────────────────────
 
 class IBKRClient:
@@ -173,6 +195,39 @@ class IBKRClient:
         except Exception as e:
             print(f"[IBKRClient] place_order({ticker}) falló: {e}")
     
+    def get_account_value(self) -> float:
+        """Pide NetLiquidation a IBKR. Retorna el NAV total de la cuenta en USD."""
+        if not self._connected:
+            print("[IBKRClient] Sin conexión — get_account_value devuelve nan.")
+            return math.nan
+        try:
+            app = _AccountValueWrapper()
+            app.connect(self.host, self.port, self.client_id + 400 + int(time.time() % 1000))
+            threading.Thread(target=app.run, daemon=True).start()
+
+            t0 = time.time()
+            while not app.ready and time.time() - t0 < self.timeout:
+                time.sleep(0.05)
+
+            if not app.ready:
+                print("[IBKRClient] get_account_value: timeout esperando nextValidId.")
+                app.disconnect()
+                return math.nan
+
+            app.reqAccountSummary(reqId=1, groupName="All", tags="NetLiquidation")
+
+            t0 = time.time()
+            while not app._done and time.time() - t0 < self.timeout:
+                time.sleep(0.05)
+
+            nav = app.nav
+            app.reqAccountSummaryCancel(reqId=1)
+            app.disconnect()
+            return nav
+        except Exception as e:
+            print(f"[IBKRClient] get_account_value falló: {e}")
+            return math.nan
+
     def get_positions(self):
         """Devuelve dict {ticker: cantidad} de las posiciones actuales en TWS paper."""
         if not self._connected:

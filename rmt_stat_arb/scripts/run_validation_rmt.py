@@ -15,6 +15,7 @@ import datetime
 import importlib.util
 import json
 import sys
+from math import comb as _comb
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -136,7 +137,7 @@ CPCV_CFG = CPCVConfig(
     n_test_groups = 2,
 )
 
-_RESULTS_DIR = _RMT_ROOT / "results"
+_RESULTS_DIR = _RMT_ROOT / "results" / "backtesting"
 _N_INNER_SPLITS = 4
 
 
@@ -317,6 +318,38 @@ def main() -> None:
     if mkt is not None:
         print(f"[*] Benchmark: {len(mkt)} días")
 
+    # ── 3b. Bloque de configuración ───────────────────────────────────────────
+    n_tickers = data.shape[1] - 1
+    n_dias    = len(data)
+    n_combos  = _comb(CPCV_CFG.n_groups, CPCV_CFG.n_test_groups)
+    slip      = EXECUTION["slippage_pct"]
+    dmkt      = EXECUTION["derecho_mercado_pct"]
+    alyc      = EXECUTION["arancel_alyc_pct"]
+    total_rt  = (slip + dmkt + alyc) * 2
+
+    print("\n" + "═"*51)
+    print("  CONFIGURACIÓN DEL BACKTEST")
+    print("═"*51)
+    print(f"  Universo de datos     : {n_tickers} tickers líquidos del S&P 500")
+    print(f"  Período               : {start} → {end} ({n_dias} días)")
+    print(f"  Fuente de datos       : Yahoo Finance (yfinance)")
+    print(f"  Costos de transacción :")
+    print(f"    - Slippage           : {slip*100:.2f}%")
+    print(f"    - Derecho de mercado : {dmkt*100:.2f}%")
+    print(f"    - Arancel ALYC       : {alyc*100:.2f}%")
+    print(f"    - Total ida+vuelta   : ~{total_rt*100:.2f}%")
+    print(f"  Rebalanceo            : {REBALANCE_FREQUENCY}")
+    print(f"  Capital inicial       : ${INITIAL_CAPITAL:,.0f}")
+    print(f"  Validación            : CPCV (Combinatorial Purged Cross-Validation)")
+    print(f"    - N grupos          : {CPCV_CFG.n_groups}")
+    print(f"    - Test groups       : {CPCV_CFG.n_test_groups}")
+    print(f"    - Combinaciones     : {n_combos}")
+    print(f"    - Trayectorias (φ)  : {phi}")
+    print(f"    - Purge horizon     : {VAL_CFG.label_horizon} barras")
+    print(f"    - Embargo           : {VAL_CFG.embargo_bars} barras")
+    print(f"    - Nested splits     : {_N_INNER_SPLITS}")
+    print("═"*51)
+
     # ── 4. Runner + wrapper de consensus ──────────────────────────────────────
     print("\n[*] Construyendo runner nested CPCV…")
     _precompute_strat = RMTStrategyPolarsPrecomputed(**PARAM_GRID[0])
@@ -379,7 +412,94 @@ def main() -> None:
     print(f"  sizing_by_zscore  : {best.get('sizing_by_zscore')}")
     print("═"*52)
 
-    # ── 10. Guardar outputs ───────────────────────────────────────────────────
+    # ── 10. Stress testing — último fold OOS ─────────────────────────────────
+    # Corre sobre un solo fold (grupos n-2 y n-1 como OOS), NO sobre los 5 paths
+    # del CPCV. Es un test de robustez puntual a perturbaciones de mercado,
+    # no de validación estadística.
+    from analysis.stress_testing import (
+        StressTester, StressScenario,
+        apply_slippage_bps, apply_pnl_drag, scale_pnl,
+    )
+    from pipeline.splits import make_groups, build_train_segments
+
+    # Stress testing — 4 escenarios sobre el último fold OOS.
+    #
+    # Decisión de diseño: NO incluimos escenarios de "volatility shock" ni
+    # "liquidity shock" porque con precompute los residuos RMT se computan
+    # una vez sobre el dataset original. Aplicar oos_transform escala los
+    # precios pero NO recomputa la dinámica de factores — el efecto neto
+    # se reduce a escalar el PnL. Para un stress de volatilidad real haría
+    # falta recalibrar el modelo factorial con datos perturbados, lo cual
+    # está fuera del scope del trabajo. Queda como trabajo futuro.
+    print("\n[*] Corriendo stress tests sobre el último fold OOS…")
+    _groups = make_groups(data, CPCV_CFG.n_groups)
+    _n      = CPCV_CFG.n_groups
+    _last_combo = (_n - 2, _n - 1)
+    _test_set   = set(_last_combo)
+    _is_segs    = build_train_segments(
+        _groups, _test_set,
+        VAL_CFG.label_horizon, VAL_CFG.embargo_pct, VAL_CFG.embargo_bars,
+    )
+    _oos_data = pl.concat([_groups[i] for i in _last_combo])
+
+    # Runner limpio (sin wrapper de consensus, _RESIDUOS_PD ya está cargado)
+    _stress_runner = build_nested_cpcv_runner(
+        val_cfg           = VAL_CFG,
+        grid              = PARAM_GRID,
+        estimator_factory = estimator_factory,
+        n_inner_splits    = _N_INNER_SPLITS,
+        precompute_fn     = None,
+    )
+
+    _scenarios = [
+        StressScenario(name="Slippage 5x (50 bps)",  pnl_transform=apply_slippage_bps(50)),
+        StressScenario(name="Slippage 10x (100 bps)", pnl_transform=apply_slippage_bps(100)),
+        StressScenario(name="Fee drag 5 bps/día",     pnl_transform=apply_pnl_drag(0.0005)),
+        StressScenario(name="PnL crush 50%",          pnl_transform=scale_pnl(0.5)),
+    ]
+
+    _tester = StressTester(bars_per_year=VAL_CFG.bars_per_year)
+    _srep   = _tester.run(_is_segs, _oos_data, _stress_runner, _scenarios)
+
+    def _fmt_stress(met: dict) -> str:
+        return (f"Sharpe={met['sharpe']:+.3f}  "
+                f"MaxDD={met['max_drawdown']:.2%}  "
+                f"AnnRet={met['annualized_return']:.2%}")
+
+    print("\n" + "═"*51)
+    print("  STRESS TESTING — último fold OOS")
+    print("  (un fold, no los 5 paths CPCV)")
+    print("═"*51)
+    print(f"  Baseline            : {_fmt_stress(_srep.baseline_metrics)}")
+    for _run in _srep.runs:
+        _ds = _run.delta_metrics.get("delta_sharpe", float("nan"))
+        print(f"  {_run.scenario:<20}: {_fmt_stress(_run.metrics)}  Δ={_ds:+.3f}")
+    _wc = _srep.worst_case("sharpe")
+    if _wc:
+        print(f"\n  Worst case (Sharpe) : {_wc.scenario}  "
+              f"Sharpe={_wc.metrics['sharpe']:+.3f}")
+    print(f"\n  Nota: stress de volatilidad/correlaciones requiere recalibración")
+    print(f"  del modelo factorial RMT — fuera del scope actual.")
+    print("═"*51)
+
+    # Serializar para metrics.json
+    _stress_out = {
+        "note": "4 PnL-side scenarios on the last OOS fold. Vol/liquidity shocks excluded due to precompute architecture (would require RMT model recalibration).",
+        "baseline": _srep.baseline_metrics,
+        "scenarios": [
+            {
+                "name":              r.scenario,
+                "sharpe":            r.metrics["sharpe"],
+                "max_drawdown":      r.metrics["max_drawdown"],
+                "annualized_return": r.metrics["annualized_return"],
+                "delta_sharpe":      r.delta_metrics.get("delta_sharpe"),
+            }
+            for r in _srep.runs
+        ],
+        "worst_case_scenario": _wc.scenario if _wc else None,
+    }
+
+    # ── 11. Guardar outputs ───────────────────────────────────────────────────
 
     # equity_curves.parquet
     rows = []
@@ -430,6 +550,8 @@ def main() -> None:
         "pct_positive_paths": m["pct_positive_paths"],
         "alpha_annualized":   mr.get("alpha"),
         "beta":               mr.get("beta"),
+        "turnover_annual":    m.get("turnover_annual_mean"),
+        "turnover_per_path":  m.get("turnover_per_path"),
         "n_paths":            m["phi"],
         "n_combos":           m["n_combos"],
         "embargo_bars":       VAL_CFG.embargo_bars,
@@ -437,6 +559,7 @@ def main() -> None:
         "param_grid":         PARAM_GRID,
         "consensus_per_fold": _consensus_log,
         "diagnostico_grid":   diag,
+        "stress_testing":     _stress_out,
         "date_range":         [start, end],
         "generated_at":       datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }

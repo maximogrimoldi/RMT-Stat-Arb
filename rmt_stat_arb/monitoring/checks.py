@@ -1,11 +1,11 @@
 """
 Checks de salud para RMT Stat-Arb paper trading.
 
-Pre-trade : conexión IBKR, estimación NAV, stop loss mensual.
-Post-trade : estructura del log, market-neutral, gross exposure,
+Pre-trade : datos frescos, TWS disponible, idempotencia.
+Post-trade : capital, drawdown del mes, market-neutral, gross exposure,
              n_posiciones, z-scores extremos.
 
-No importa signals.py ni core.py — los z-scores se leen del parquet.
+Lee results/trading/daily_state.parquet.
 """
 
 import json
@@ -15,56 +15,8 @@ import pandas as pd
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]   # → rmt_stat_arb/
-_STATE_PATH   = _PROJECT_ROOT / "results" / "paper" / "daily_state.parquet"
-_ORDERS_PATH  = _PROJECT_ROOT / "results" / "paper" / "orders_log.parquet"
+_STATE_PATH   = _PROJECT_ROOT / "results" / "trading" / "daily_state.parquet"
 
-
-# ── NAV Estimation ────────────────────────────────────────────────────────────
-
-def estimate_nav(prices_hist, initial_capital):
-    """
-    Estima NAV actual y month_start_nav desde el último estado guardado
-    más retornos de precios desde esa fecha hasta hoy.
-    Devuelve (estimated_nav, month_start_nav).
-    """
-    if not _STATE_PATH.exists():
-        return initial_capital, initial_capital
-
-    state_df = pd.read_parquet(_STATE_PATH)
-    if state_df.empty:
-        return initial_capital, initial_capital
-
-    last     = state_df.iloc[-1]
-    last_nav = float(last["estimated_nav"])
-
-    last_weights_raw = json.loads(last["actual_weights"])
-    if not last_weights_raw:
-        last_weights_raw = json.loads(last["target_weights"])
-    last_weights = pd.Series(last_weights_raw).reindex(prices_hist.columns).fillna(0.0)
-
-    try:
-        prices_since = prices_hist.loc[str(last["date"])[:10]:]
-    except KeyError:
-        estimated_nav = last_nav
-    else:
-        if len(prices_since) < 2:
-            estimated_nav = last_nav
-        else:
-            daily_rets     = prices_since.pct_change().iloc[1:].fillna(0.0)
-            portfolio_rets = daily_rets.dot(last_weights)
-            estimated_nav  = last_nav * float((1 + portfolio_rets).prod())
-
-    current_month = pd.Timestamp.today().strftime("%Y-%m")
-    month_mask    = state_df["date"].str.startswith(current_month)
-    if month_mask.any():
-        month_start_nav = float(state_df[month_mask].iloc[0]["estimated_nav"])
-    else:
-        month_start_nav = estimated_nav
-
-    return estimated_nav, month_start_nav
-
-
-# ── Helpers internos ──────────────────────────────────────────────────────────
 
 def _check_ibkr_ping(host="127.0.0.1", port=7497, timeout=3.0):
     try:
@@ -74,129 +26,125 @@ def _check_ibkr_ping(host="127.0.0.1", port=7497, timeout=3.0):
         return False
 
 
+def _load_last_row() -> pd.Series | None:
+    """Carga la última fila de daily_state.parquet. Retorna None si no existe o está vacío."""
+    if not _STATE_PATH.exists():
+        return None
+    try:
+        df = pd.read_parquet(_STATE_PATH)
+        return df.iloc[-1] if not df.empty else None
+    except Exception:
+        return None
+
+
 # ── Pre-Trade Checks ──────────────────────────────────────────────────────────
 
-def run_pre_trade_checks(prices_hist, initial_capital, stop_loss_pct=0.15):
-    print("\n" + "=" * 55)
-    print("  PRE-TRADE HEALTH CHECK")
-    print("=" * 55)
+def run_pre_trade_checks(prices_hist, force: bool = False) -> bool:
+    """
+    3 checks en orden. Retorna False en el primero que falla.
+    1. Datos actualizados (último precio == hoy).
+    2. TWS disponible en 127.0.0.1:7497.
+    3. Idempotencia: date_only de la última fila del parquet != hoy.  (salteado si force=True)
+    """
+    print("\n" + "═" * 51)
+    print("  PRE-TRADE CHECKS")
+    print("═" * 51)
 
-    # --- Check 1: TWS disponible ---
+    # Check 1: datos frescos
+    last_date = prices_hist.index[-1].date()
+    today     = pd.Timestamp.today().date()
+    if last_date != today:
+        print(f"✗ Datos desactualizados — último precio: {last_date}, hoy: {today}")
+        print("  Correr descarga antes de ejecutar.")
+        print("═" * 51)
+        return False
+    print(f"✓ Datos frescos: último precio = {last_date}")
+
+    # Check 2: TWS
     if not _check_ibkr_ping():
         print("✗ TWS: sin conexión en 127.0.0.1:7497.")
-        print("       Abrí Trader Workstation y volvé a correr.")
-        print("=" * 55)
-        return False, False, None, None
-
+        print("  Abrí Trader Workstation y volvé a correr.")
+        print("═" * 51)
+        return False
     print("✓ TWS: responde en 127.0.0.1:7497")
 
-    # --- Check 2: Stop Loss mensual ---
-    estimated_nav, month_start_nav = estimate_nav(prices_hist, initial_capital)
-    drawdown = (estimated_nav - month_start_nav) / month_start_nav
-    nav_line = (
-        f"NAV ~${estimated_nav:,.0f} | "
-        f"Inicio de mes ~${month_start_nav:,.0f} | "
-        f"Drawdown: {drawdown:+.1%}"
-    )
-
-    sl_triggered = drawdown < -stop_loss_pct
-    if sl_triggered:
-        print(f"\n{'!' * 55}")
-        print(f"✗ STOP LOSS DISPARADO — {nav_line}")
-        print(f"{'!' * 55}")
+    # Check 3: idempotencia
+    if force:
+        print("⚠  --force activo: saltando check de idempotencia")
     else:
-        print(f"✓ Stop Loss: dentro del límite — {nav_line}")
+        today_str = str(today)
+        last      = _load_last_row()
+        if last is not None and str(last.get("date_only", "")) == today_str:
+            print(f"✗ Ya se corrió hoy ({today_str}), no se rebalancea de nuevo.")
+            print("  Usar --force para saltear este check.")
+            print("═" * 51)
+            return False
+        print("✓ Idempotencia: no se corrió hoy aún")
 
-    print("=" * 55)
-    return True, sl_triggered, estimated_nav, month_start_nav
+    print("═" * 51)
+    return True
 
 
 # ── Post-Trade Health Check ───────────────────────────────────────────────────
 
-def run_health_checks():
-    print("\n" + "=" * 55)
-    print("  POST-TRADE HEALTH CHECK")
-    print("=" * 55)
+def run_health_checks() -> bool:
+    """
+    Lee la última fila de daily_state.parquet y muestra bloque post-trade:
+    capital, drawdown del mes y 4 health checks (warnings, no bloquean).
+    """
+    print("\n" + "═" * 51)
+    print("  POST-TRADE — RMT Stat-Arb")
+    print("═" * 51)
 
-    if not _STATE_PATH.exists():
-        print("✗ No se encontró daily_state.parquet.")
+    last = _load_last_row()
+    if last is None:
+        print("✗ No se encontró daily_state.parquet o está vacío.")
+        print("═" * 51)
         return False
 
     try:
-        state_df = pd.read_parquet(_STATE_PATH)
-        if state_df.empty:
-            print("⚠  daily_state.parquet existe pero está vacío — sin registros para chequear.")
-            return False
-        last     = state_df.iloc[-1]
+        current_nav     = float(last["estimated_nav"])
+        month_start_nav = float(last["month_start_nav"])
+        n_pos           = int(last["n_active_positions"])
+        drawdown        = (current_nav - month_start_nav) / month_start_nav if month_start_nav else 0.0
 
-        last_date = str(last["date"])[:10]
-        hoy       = pd.Timestamp.now().strftime("%Y-%m-%d")
-
-        if last_date != hoy:
-            print(f"✗ Estado no guardado hoy. Último registro: {last_date}")
-            print("=" * 55 + "\n")
-            return False
-
-        nav         = float(last["estimated_nav"])
-        month_start = float(last["month_start_nav"])
-        drawdown    = (nav - month_start) / month_start
-        n_pos       = int(last["n_active_positions"])
-
-        print(f"  Registro guardado : {last['date']}")
-        print(f"  NAV final         : ${nav:,.2f}")
-        print(f"  Drawdown del mes  : {drawdown:+.1%}")
+        print(f"  Capital actual    : ${current_nav:,.2f}")
+        print(f"  Drawdown del mes  : {drawdown:+.2%}   (NAV / month_start_nav - 1)")
         print(f"  Posiciones activas: {n_pos}")
+        print("═" * 51)
+        print("  HEALTH CHECKS")
 
-        if _ORDERS_PATH.exists():
-            orders_df = pd.read_parquet(_ORDERS_PATH)
-            n_orders  = orders_df["date"].str.contains(hoy, na=False).sum()
-            print(f"  Órdenes enviadas  : {n_orders}")
-
-        alertas = 0
-
-        # ── Check 1: drawdown cercano al stop loss ────────────────────────────
-        if drawdown < -0.10:
-            print(f"\n⚠  Drawdown {drawdown:+.1%} este mes — cerca del Stop Loss.")
-            alertas += 1
-        else:
-            print(f"✓ Drawdown del mes: {drawdown:+.1%}")
-
-        # ── Leer pesos y z-scores ─────────────────────────────────────────────
-        target_weights = json.loads(last["target_weights"])
-
-        try:
-            zscores_raw = json.loads(last.get("zscores", "{}") or "{}")
-        except (TypeError, json.JSONDecodeError):
-            zscores_raw = {}
-
+        target_weights = json.loads(last.get("target_weights", "{}") or "{}")
+        zscores_raw    = json.loads(last.get("zscores", "{}") or "{}")
         active_tickers = [t for t, w in target_weights.items() if abs(w) > 1e-6]
+        alertas        = 0
 
-        # ── Check 2: Market-neutral ───────────────────────────────────────────
+        # Market-neutral
         net_exposure = sum(target_weights.values())
         if abs(net_exposure) >= 0.15:
-            print(f"⚠  Market-neutral: exposición neta = {net_exposure:+.3f}  (límite |0.15|)")
+            print(f"  Market-neutral (|Σpesos| < 0.15)  : ⚠  valor={net_exposure:+.3f}")
             alertas += 1
         else:
-            print(f"✓ Market-neutral: exposición neta = {net_exposure:+.3f}")
+            print(f"  Market-neutral (|Σpesos| < 0.15)  : ✓  valor={net_exposure:+.3f}")
 
-        # ── Check 3: Gross exposure ───────────────────────────────────────────
+        # Gross exposure
         gross = sum(abs(w) for w in target_weights.values())
         if not (0.3 < gross < 1.1):
-            print(f"⚠  Gross exposure: {gross:.3f}  (esperado 0.3 < gross < 1.1)")
+            print(f"  Gross exposure (0.3 < Σ|w| < 1.1) : ⚠  valor={gross:.3f}")
             alertas += 1
         else:
-            print(f"✓ Gross exposure: {gross:.3f}")
+            print(f"  Gross exposure (0.3 < Σ|w| < 1.1) : ✓  valor={gross:.3f}")
 
-        # ── Check 4: N posiciones ─────────────────────────────────────────────
+        # N posiciones
         if not (5 <= n_pos <= 40):
-            print(f"⚠  N posiciones: {n_pos}  (esperado 5 ≤ n ≤ 40)")
+            print(f"  N posiciones (5 ≤ n ≤ 40)         : ⚠  valor={n_pos}")
             alertas += 1
         else:
-            print(f"✓ N posiciones: {n_pos}")
+            print(f"  N posiciones (5 ≤ n ≤ 40)         : ✓  valor={n_pos}")
 
-        # ── Check 5: Z-scores extremos en posiciones abiertas ─────────────────
+        # Z-scores extremos
         if not zscores_raw:
-            print("⚠  Z-scores: columna vacía en el registro — check salteado.")
+            print("  Z-scores extremos (|z| < 6)        : ⚠  sin datos de z-scores")
         else:
             extremos = [
                 (t, zscores_raw[t])
@@ -207,20 +155,20 @@ def run_health_checks():
             ]
             if extremos:
                 detalle = ", ".join(f"{t}={z:.2f}" for t, z in extremos)
-                print(f"⚠  Z-scores extremos (|z|>6) en posiciones abiertas: {detalle}")
+                print(f"  Z-scores extremos (|z| < 6)        : ⚠  {detalle}")
                 alertas += 1
             else:
-                print("✓ Z-scores: ningún |z| > 6 en posiciones abiertas")
+                print("  Z-scores extremos (|z| < 6)        : ✓  ningún |z|>6 en posiciones activas")
 
-        print()
-        if alertas == 0:
-            print("✓ Ejecución y guardado exitosos. Sistema estable.")
+        print("═" * 51)
+        if alertas:
+            print(f"  ⚠  {alertas} alerta(s). Revisar antes de la próxima sesión.")
         else:
-            print(f"⚠  {alertas} alerta(s) activa(s). Revisar antes de la próxima sesión.")
-
-        print("=" * 55 + "\n")
+            print("  ✓  Sistema estable.")
+        print("═" * 51 + "\n")
         return alertas == 0
 
     except Exception as e:
         print(f"✗ Falló el monitoreo post-trade: {e}")
+        print("═" * 51)
         return False
