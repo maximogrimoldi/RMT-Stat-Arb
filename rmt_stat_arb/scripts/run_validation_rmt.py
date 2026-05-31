@@ -273,16 +273,48 @@ def _fetch_benchmark(start: str, end: str) -> pl.DataFrame | None:
 # ── Plot ──────────────────────────────────────────────────────────────────────
 
 def _plot_equity_curves(ec_df: pd.DataFrame, out_path: Path) -> None:
-    """Genera PNG con las N equity curves del CPCV (una línea por path)."""
+    """
+    Plot de las equity curves del CPCV con:
+      - 5 paths individuales en gris claro (fondo)
+      - Mean de los 5 paths en línea negra gruesa
+      - Banda entre percentil 10 y percentil 90 (en azul transparente)
+      - Línea de break-even en y=1.0
+    """
     fig, ax = plt.subplots(figsize=(12, 6))
-    for path_id in sorted(ec_df["path"].unique()):
-        eq = ec_df[ec_df["path"] == path_id]["equity"].values
-        ax.plot(eq, label=f"Path {path_id}", linewidth=1.2)
-    ax.set_title("CPCV Equity Curves — RMT Stat-Arb", fontsize=13, fontweight="bold")
+
+    # Pivotar: filas = barra, columnas = path
+    pivot = ec_df.pivot(index="bar", columns="path", values="equity")
+
+    # Recortar la parte inicial donde solo hay NaNs (paths arrancan después del warmup)
+    first_valid = pivot.dropna(how="all").index[0]
+    pivot = pivot.loc[first_valid:]
+
+    bars        = pivot.index.values
+    paths_array = pivot.values  # shape (n_bars, n_paths)
+
+    # Estadísticas a través de los paths
+    mean_curve = np.nanmean(paths_array, axis=1)
+    p10        = np.nanpercentile(paths_array, 10, axis=1)
+    p90        = np.nanpercentile(paths_array, 90, axis=1)
+
+    # 5 paths individuales en gris transparente
+    for col in pivot.columns:
+        ax.plot(bars, pivot[col].values, color="gray", alpha=0.3, linewidth=0.8)
+
+    # Banda p10-p90
+    ax.fill_between(bars, p10, p90, alpha=0.25, color="#1f77b4", label="P10–P90")
+
+    # Mean line
+    ax.plot(bars, mean_curve, color="black", linewidth=2.0, label="Mean (5 paths)")
+
+    # Break-even
+    ax.axhline(1.0, color="red", linestyle="--", linewidth=1.0, alpha=0.6, label="Break-even")
+
+    ax.set_title("CPCV Equity Curves — RMT Stat-Arb (5 paths)", fontsize=13, fontweight="bold")
     ax.set_xlabel("Barra")
-    ax.set_ylabel("Equity ($)")
+    ax.set_ylabel("Equity (normalizado, inicio=1.0)")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.85)
+    ax.legend(loc="upper left", fontsize=10, framealpha=0.9)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
