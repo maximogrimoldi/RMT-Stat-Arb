@@ -185,6 +185,7 @@ class RMTStrategy:
         zs        = pd.Series(self.rmt.zscore(acum), index=tickers)
 
         # ── 4. Lógica entry / exit ────────────────────────────────────────────
+        ticker_idx = {t: i for i, t in enumerate(tickers)}
         posiciones_finales: dict = {}
         for t in tickers:
             z          = float(zs[t]) if not np.isnan(zs[t]) else 0.0
@@ -197,16 +198,18 @@ class RMTStrategy:
                 #       (abrí LONG porque z<0; si ahora z>0 se pasó de largo → cerrar)
                 #       (abrí SHORT porque z>0; si ahora z<0 se pasó de largo → cerrar)
                 # NO se da vuelta la posición: solo se cierra, no se abre la opuesta.
+                # ADF no aplica al exit — solo a nuevas aperturas.
                 z_cruzó = (pos_actual * z > 0)
                 if abs(z) >= self.exit_threshold and not z_cruzó:
                     posiciones_finales[t] = pos_actual   # mantener
                 # else → no incluir → se cierra
             else:
-                # Sin posición: abrir si hay señal suficiente
-                if z < -self.entry_threshold:
-                    posiciones_finales[t] = 1    # long
-                elif z > self.entry_threshold:
-                    posiciones_finales[t] = -1   # short
+                # Sin posición: filtrar con ADF antes de abrir
+                if abs(z) > self.entry_threshold:
+                    residuos_diarios = ventana_z.values[:, ticker_idx[t]]
+                    passed, _ = self.rmt.test_adf(residuos_diarios)
+                    if passed:
+                        posiciones_finales[t] = 1 if z < 0 else -1
 
         # ── 5. Sizing ─────────────────────────────────────────────────────────
         pesos = self._calcular_pesos(posiciones_finales, zs)
