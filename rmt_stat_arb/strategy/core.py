@@ -140,7 +140,7 @@ class RMTStrategy:
           +1 = long abierto, -1 = short abierto, ausente = sin posición.
           None equivale a dict vacío (primera barra, sin posiciones previas).
         current_bar_date: verifica prices.index[-1] == fecha; lanza ValueError
-          si no coincide. Útil para detectar look-ahead durante desarrollo.
+          si no coincide. Sirve como guarda contra look-ahead bias en el contrato de la estrategia.
         return_diagnostics: si True, devuelve (weights, {"zscores": {ticker: float}})
           en lugar de solo weights. El path por defecto (False) es idéntico al anterior.
 

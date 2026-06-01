@@ -6,7 +6,7 @@ Arquitectura precompute (López de Prado):
   2. En cada barra OOS, get_weights() slicéa _RESIDUOS_PD hasta la fecha actual.
   3. El engine sigue usando precios reales para contabilidad (fills, notional).
 
-Único cambio de interfaz: el motor pasa pl.DataFrame; RMTStrategy espera
+Diferencia de interfaz: el motor pasa pl.DataFrame; RMTStrategy espera
 pd.DataFrame con DatetimeIndex. Lo resuelve RMTStrategyPolarsPrecomputed.
 """
 from __future__ import annotations
@@ -175,7 +175,7 @@ def estimator_factory(params: dict) -> EventDrivenEstimator:
 def _wrap_runner_with_consensus_log(original_runner):
     """
     Replica el closure del runner original capturando tuning.consensus_params
-    antes del del tuning. Preserva el atributo .precompute si existe.
+    tras el tuning interno. Preserva el atributo .precompute si existe.
     """
     freevars = original_runner.__code__.co_freevars
     cells    = {name: cell.cell_contents
