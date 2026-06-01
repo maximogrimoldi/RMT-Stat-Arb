@@ -117,6 +117,7 @@ Es **stateless**: `get_weights(prices, current_positions)` devuelve siempre los 
 
 ## Autores
 
-- Juan Albamonte — Estrategia RMT
-- Maximiliano Grimoldi — Motor de backtesting CPCV
-- Quinto Adoquín — Documentación académica
+- Juan Cruz Albamonte
+- Maximo Grimoldi
+- Pedro Hoffmann
+- Quinto N. Anchorena
