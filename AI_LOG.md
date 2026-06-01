@@ -1,11 +1,12 @@
-# AI Log — Backtester
+# IA Log 
 
-Registro de cómo se usó AI en el desarrollo del engine de backtesting.
-No cubre la estrategia, solo el motor de validación.
+## 1) Backtester ##
+
+Registro de cómo se usó IA en el desarrollo del engine de backtesting.
 
 ---
 
-## Tareas donde la AI fue útil
+## Tareas donde la IA fue útil
 
 - Implementar clases que habíamos diseñado (Portfolio, EventLoop, CPCVEngine, EventDrivenEstimator)
 - Sintaxis de Polars (slices, joins, pct_change, drop_nulls)
@@ -15,18 +16,18 @@ No cubre la estrategia, solo el motor de validación.
 
 ---
 
-## Tareas donde decidimos no confiar en la AI
+## Tareas donde decidimos no confiar en la IA
 
 - Arquitectura general del engine (event-driven, qué componentes existen y cómo se conectan)
 - Decisión de eliminar DataHandler, SignalEvent, MarketEvent, PositionSizer — simplificar a weights directos
-- Diseño del contrato de la estrategia: `get_weights(data, positions) → {symbol: weight}`
+- Diseño del contrato de la estrategia: `get_weights(data, positions)`
 - Qué valores tiene el dict de posiciones ({1, -1, 0}, no cantidades reales)
 - Cómo reconstruir trayectorias CPCV y qué métricas reportar
 - Decisión de usar purge + embargo en los splits
 
 ---
 
-## Errores de la AI por fase
+## Errores de la IA por fase
 
 ### Engine (sesiones previas)
 
@@ -40,7 +41,7 @@ No cubre la estrategia, solo el motor de validación.
 
 ---
 
-## Decisiones de diseño que tomamos, no la AI
+## Decisiones de diseño que tomamos, no la IA
 
 - **Sin DataHandler**: en una arquitectura clásica, el DataHandler es el guardián del tiempo. Decidimos eliminarlo y que EventLoop controle el cursor temporal directamente con `segment.slice(0, i+1)`. Más simple, menos indirección.
 
@@ -58,13 +59,13 @@ No cubre la estrategia, solo el motor de validación.
 
 ---
 
-# AI Log — Estrategia + Paper Trading + CLI
+## 2 )Estrategia + Paper Trading + CLI ##
 
-Registro de cómo se usó AI en el desarrollo de la estrategia RMT, el paper trading contra IBKR, y la integración del CLI.
+Registro de cómo se usó IA en el desarrollo de la estrategia RMT, el paper trading contra IBKR, y la integración del CLI.
 
 ---
 
-## Tareas donde la AI fue útil
+## Tareas donde la IA fue útil
 
 - Implementar la matemática de RMT que entendíamos conceptualmente: Marchenko-Pastur, regresión OLS sobre factores, cálculo de residuos rolling.
 - Boilerplate de la conexión a IBKR vía `ibapi`: el callback pattern es feo y repetitivo.
@@ -74,17 +75,17 @@ Registro de cómo se usó AI en el desarrollo de la estrategia RMT, el paper tra
 
 ---
 
-## Tareas donde decidimos no confiar en la AI
+## Tareas donde decidimos no confiar en la IA
 
-- Contrato de la estrategia: que `get_weights(prices, current_positions)` sea estrictamente stateless. La AI tendía a sugerir mantener estado entre llamadas — lo bloqueamos porque rompe la validación por CPCV.
-- Decisión de z-score empírico en vez de Ornstein-Uhlenbeck completo. La AI proponía implementar el OU con regresión AR(1) por seguir a Avellaneda-Lee al pie de la letra. Decidimos dejar la versión simplificada (media y desvío muestral del residuo acumulado) porque el OU no agrega valor de señal en este universo y agrega parámetros sin validar.
-- Grid de hiperparámetros: la AI sugería ampliarlo a 12-18 combinaciones. Lo limitamos a 6 (3 entry thresholds × 2 sizing) para mantener CPCV honesto y evitar p-hacking — un grid grande con DSR penaliza el resultado.
+- Contrato de la estrategia: que `get_weights(prices, current_positions)` sea estrictamente stateless. La IA tendía a sugerir mantener estado entre llamadas — lo bloqueamos porque rompe la validación por CPCV.
+- Decisión de z-score empírico en vez de Ornstein-Uhlenbeck completo. La IA proponía implementar el OU con regresión AR(1) por seguir a Avellaneda-Lee al pie de la letra. Decidimos dejar la versión simplificada (media y desvío muestral del residuo acumulado) porque el OU no agrega valor de señal en este universo y agrega parámetros sin validar.
+- Grid de hiperparámetros: la IA sugería ampliarlo a 12-18 combinaciones. Lo limitamos a 6 (3 entry thresholds × 2 sizing) para mantener CPCV honesto y evitar p-hacking — un grid grande con DSR penaliza el resultado.
 - Cuándo ampliar el grid después de ver resultados. Mantuvimos la regla: solo ampliamos si el tuner converge al borde del grid (diagnóstico ex-ante), nunca para mejorar el Sharpe (eso sería p-hacking que el DSR captura).
-- Sacar el stop loss del flujo de paper trading: decisión consciente, asumiendo el riesgo. La AI nos advirtió varias veces pero la decisión fue nuestra.
+- Sacar el stop loss del flujo de paper trading: decisión consciente, asumiendo el riesgo. La IA nos advirtió varias veces pero la decisión fue nuestra.
 
 ---
 
-## Errores de la AI por fase
+## Errores de la IA por fase
 
 ### Paper trading (refactor inicial)
 
@@ -94,17 +95,17 @@ Registro de cómo se usó AI en el desarrollo de la estrategia RMT, el paper tra
 
 ### Stress testing (último fold)
 
-**Slippage al revés**: la función `apply_slippage_bps` del motor (que la AI heredó sin chequear) usaba `arr - sign(arr) * drag`. Eso suma drag a retornos negativos (porque `-(-1 × drag) = +drag`), por lo que slippage "mejoraba" las pérdidas. Lo detectamos cuando el escenario "Slippage 10x" daba Sharpe positivo, lo cual es físicamente imposible. Fix: `arr - drag_por_barra`, con drag distribuido proporcionalmente entre barras asumiendo 12 trades/año (rebalanceo mensual).
+**Slippage al revés**: la función `apply_slippage_bps` del motor (que la IA heredó sin chequear) usaba `arr - sign(arr) * drag`. Eso suma drag a retornos negativos (porque `-(-1 × drag) = +drag`), por lo que slippage "mejoraba" las pérdidas. Lo detectamos cuando el escenario "Slippage 10x" daba Sharpe positivo, lo cual es físicamente imposible. Fix: `arr - drag_por_barra`, con drag distribuido proporcionalmente entre barras asumiendo 12 trades/año (rebalanceo mensual).
 
-**Turnover propagado a 0 por wrapper**: cuando se incorporó el tracking de turnover al motor, el `run_validation_rmt.py` tenía un wrapper `_wrap_runner_with_consensus_log` que reimplementaba la lógica del runner base sin propagar `last_turnover`. La AI escribió el wrapper inicial y se olvidó del attribute passthrough. Resultado: turnover siempre 0.0. Fix de dos líneas en `tuning.py` y `run_validation_rmt.py`.
+**Turnover propagado a 0 por wrapper**: cuando se incorporó el tracking de turnover al motor, el `run_validation_rmt.py` tenía un wrapper `_wrap_runner_with_consensus_log` que reimplementaba la lógica del runner base sin propagar `last_turnover`. La IA escribió el wrapper inicial y se olvidó del attribute passthrough. Resultado: turnover siempre 0.0. Fix de dos líneas en `tuning.py` y `run_validation_rmt.py`.
 
 ### Validación
 
-**`oos_transform` redundante con precompute**: la AI propuso 5 escenarios de stress incluyendo `volatility_shock(1.5)` y `liquidity_shock(0.7)` que transforman precios. Pero con precompute los residuos RMT se calculan una vez sobre datos originales — escalar precios en OOS no recomputa la dinámica de factores. El efecto neto es matemáticamente equivalente a escalar el PnL. Detectamos la redundancia al razonarlo. Decisión: eliminar esos dos escenarios, quedarnos con 4 PnL-side honestos (slippage 5x/10x, fee drag, PnL crush) y documentar la limitación arquitectónica.
+**`oos_transform` redundante con precompute**: la IA propuso 5 escenarios de stress incluyendo `volatility_shock(1.5)` y `liquidity_shock(0.7)` que transforman precios. Pero con precompute los residuos RMT se calculan una vez sobre datos originales — escalar precios en OOS no recomputa la dinámica de factores. El efecto neto es matemáticamente equivalente a escalar el PnL. Detectamos la redundancia al razonarlo. Decisión: eliminar esos dos escenarios, quedarnos con 4 PnL-side honestos (slippage 5x/10x, fee drag, PnL crush) y documentar la limitación arquitectónica.
 
 ---
 
-## Decisiones de diseño que tomamos, no la AI
+## Decisiones de diseño que tomamos, no la IA
 
 - **Contrato stateless absoluto**: `get_weights(prices, current_positions, current_bar_date, return_diagnostics)` no guarda nada entre llamadas. Documentado explícitamente en `CONTRATO.md`. Es lo que valida el CPCV: si la estrategia tuviera estado interno, el resultado dependería del orden en que se ejecutan los folds.
 

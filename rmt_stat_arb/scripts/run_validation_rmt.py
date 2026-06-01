@@ -287,7 +287,7 @@ def _fetch_benchmark(start: str, end: str) -> pl.DataFrame | None:
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
 
-def _plot_equity_curves(ec_df: pd.DataFrame, out_path: Path) -> None:
+def _plot_equity_curves(ec_df: pd.DataFrame, out_path: Path, date_index: "pd.DatetimeIndex | None" = None) -> None:
     """
     Plot de las equity curves del CPCV con:
       - 5 paths individuales en gris claro (fondo)
@@ -307,6 +307,14 @@ def _plot_equity_curves(ec_df: pd.DataFrame, out_path: Path) -> None:
     bars        = pivot.index.values
     paths_array = pivot.values  # shape (n_bars, n_paths)
 
+    # Mapear bars a fechas si se proveyó el índice
+    if date_index is not None:
+        x_axis = date_index[bars]
+        x_label = "Fecha"
+    else:
+        x_axis = bars
+        x_label = "Barra"
+
     # Estadísticas a través de los paths
     mean_curve = np.nanmean(paths_array, axis=1)
     p10        = np.nanpercentile(paths_array, 10, axis=1)
@@ -314,22 +322,27 @@ def _plot_equity_curves(ec_df: pd.DataFrame, out_path: Path) -> None:
 
     # 5 paths individuales en gris transparente
     for col in pivot.columns:
-        ax.plot(bars, pivot[col].values, color="gray", alpha=0.3, linewidth=0.8)
+        ax.plot(x_axis, pivot[col].values, color="gray", alpha=0.3, linewidth=0.8)
 
     # Banda p10-p90
-    ax.fill_between(bars, p10, p90, alpha=0.25, color="#1f77b4", label="P10–P90")
+    ax.fill_between(x_axis, p10, p90, alpha=0.25, color="#1f77b4", label="P10–P90")
 
     # Mean line
-    ax.plot(bars, mean_curve, color="black", linewidth=2.0, label="Mean (5 paths)")
+    ax.plot(x_axis, mean_curve, color="black", linewidth=2.0, label="Mean (5 paths)")
 
     # Break-even
     ax.axhline(1.0, color="red", linestyle="--", linewidth=1.0, alpha=0.6, label="Break-even")
 
     ax.set_title("CPCV Equity Curves — RMT Stat-Arb (5 paths)", fontsize=13, fontweight="bold")
-    ax.set_xlabel("Barra")
+    ax.set_xlabel(x_label)
     ax.set_ylabel("Equity (normalizado, inicio=1.0)")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="upper left", fontsize=10, framealpha=0.9)
+
+    # Rotar labels del eje X si son fechas para que no se solapen
+    if date_index is not None:
+        fig.autofmt_xdate(rotation=30, ha="right")
+
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -632,7 +645,9 @@ def main() -> None:
 
     # figures/equity_curves.png
     fig_path = _RESULTS_DIR / "figures" / "equity_curves.png"
-    _plot_equity_curves(ec_df, fig_path)
+    # Pasar el índice de fechas para que el plot use fechas en vez de barras
+    _date_index = pd.DatetimeIndex(data["timestamp"].to_pandas())
+    _plot_equity_curves(ec_df, fig_path, date_index=_date_index)
     print(f"[*] Plot guardado en {fig_path}")
 
 

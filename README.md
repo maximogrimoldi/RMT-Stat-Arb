@@ -7,9 +7,11 @@ Proyecto del curso de Ingeniería Financiera (F414) — Universidad de San Andr�
 ## Estructura del repositorio
 
 ```
-Backtester/
+RMT-Stat-Arb/
 ├── cpcv/                    Motor de backtesting CPCV (Combinatorial Purged Cross-Validation)
 └── rmt_stat_arb/            Estrategia RMT
+    ├── __main__.py          Punto de entrada del CLI (python -m rmt_stat_arb)
+    ├── constants.py         Constantes compartidas (INITIAL_CAPITAL)
     ├── data/                Ingesta y universo de tickers
     ├── strategy/            Lógica RMT (signals + core)
     ├── engines/             Conexión IBKR + paper trading
