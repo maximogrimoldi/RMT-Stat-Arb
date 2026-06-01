@@ -103,7 +103,7 @@ La estrategia opera residuos idiosincrásicos de un modelo factorial RMT:
 6. Abre long si `z < -entry_threshold`, short si `z > +entry_threshold` (sujeto al filtro ADF).
 7. Cierra cuando `|z| < exit_threshold` o cuando el z cruza al lado opuesto.
 
-Es **stateless**: `get_weights(prices, current_positions)` devuelve siempre los mismos pesos dados los mismos inputs. Esto es lo que valida la metodología CPCV.
+Es stateless: get_weights(prices, current_positions, current_bar_date, return_diagnostics) devuelve siempre los mismos pesos dados los mismos inputs, sin guardar estado entre llamadas. Esto es lo que valida la metodología CPCV: si la estrategia tuviera memoria interna, el resultado dependería del orden de ejecución de los folds.
 
 ## Referencias
 
