@@ -97,8 +97,9 @@ La estrategia opera residuos idiosincrásicos de un modelo factorial RMT:
 2. Aplica el umbral de Marchenko-Pastur para separar factores significativos del ruido.
 3. Regresiona los retornos contra los factores y obtiene los residuos.
 4. Calcula un z-score empírico (media y desvío de la ventana) sobre el residuo acumulado.
-5. Abre long si `z < -entry_threshold`, short si `z > +entry_threshold`.
-6. Cierra cuando `|z| < exit_threshold` o cuando el z cruza al lado opuesto.
+5. Filtra: solo opera tickers cuyos residuos diarios pasan el test de Dickey-Fuller aumentado (p < 0.05). Valida estacionariedad antes de apostar a la reversión.
+6. Abre long si `z < -entry_threshold`, short si `z > +entry_threshold` (sujeto al filtro ADF).
+7. Cierra cuando `|z| < exit_threshold` o cuando el z cruza al lado opuesto.
 
 Es **stateless**: `get_weights(prices, current_positions)` devuelve siempre los mismos pesos dados los mismos inputs. Esto es lo que valida la metodología CPCV.
 
