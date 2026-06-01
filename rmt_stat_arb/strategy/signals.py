@@ -90,6 +90,21 @@ class RMTStrategy:
         residuos_df = pd.DataFrame(residuos, index=retornos.index, columns=tickers)
         return residuos_df, autovalores_ultimo, lambda_max_ultimo
 
+    def test_adf(self, serie: np.ndarray, significance: float = 0.05) -> tuple[bool, float]:
+        """
+        Test Augmented Dickey-Fuller sobre el residuo acumulado de un ticker.
+        Devuelve (passed, p_value).
+        passed=True → residuo estacionario → hay fundamento estadístico para mean reversion.
+        passed=False → no abrir posición en ese ticker.
+        Requiere al menos 20 observaciones; devuelve (False, nan) si no hay suficientes.
+        """
+        from statsmodels.tsa.stattools import adfuller
+        serie_limpia = serie[~np.isnan(serie)]
+        if len(serie_limpia) < 20:
+            return False, np.nan
+        p_value = float(adfuller(serie_limpia)[1])
+        return p_value < significance, round(p_value, 4)
+
     def plot_autovalores(self, autovalores, lambda_max, path):
         """Guarda un gráfico de barras de los autovalores con el umbral Marchenko-Pastur."""
         import matplotlib.pyplot as plt
