@@ -55,6 +55,7 @@ if str(_CPCV_DIR) not in sys.path:
 from strategy.core import RMTStrategy
 from data.ingest   import load_prices
 from data.universe import UNIVERSE
+from constants     import INITIAL_CAPITAL
 
 def _inject(name: str, path: Path) -> None:
     if name not in sys.modules:
@@ -127,7 +128,6 @@ PARAM_GRID: list[dict] = [
 
 
 # ── Configuración ─────────────────────────────────────────────────────────────
-INITIAL_CAPITAL     = 100_000.0
 REBALANCE_FREQUENCY = "monthly"
 
 EXECUTION = dict(

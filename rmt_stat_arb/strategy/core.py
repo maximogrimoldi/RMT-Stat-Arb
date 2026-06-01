@@ -21,11 +21,11 @@ class RMTStrategy:
 
     def __init__(
         self,
-        entry_threshold:  float = 2.0,
-        exit_threshold:   float = 0.5,
+        entry_threshold:  float = 2.5,
+        exit_threshold:   float = 1.0,
         ventana_betas:    int   = 252,
         ventana_zscore:   int   = 252,
-        sizing_by_zscore: bool  = False,
+        sizing_by_zscore: bool  = True,
     ):
         self.entry_threshold  = entry_threshold
         self.exit_threshold   = exit_threshold
