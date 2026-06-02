@@ -68,7 +68,20 @@ def run_pre_trade_checks(prices_hist, force: bool = False) -> bool:
         return False
     print("✓ TWS: responde en 127.0.0.1:7497")
 
-    # Check 3: idempotencia
+    # Check 3: precios no actualizados desde el último run
+    last = _load_last_row()
+    if last is not None:
+        last_state_date = str(last.get("date_only", ""))
+        last_price_date = str(prices_hist.index[-1].date())
+        if last_state_date == last_price_date:
+            print(f"✗ Los precios del dataset no se actualizaron desde el último run "
+                  f"({last_state_date}). No tiene sentido appendear una fila duplicada.")
+            print("  Esperar al próximo día hábil o correr `python -m rmt_stat_arb status`.")
+            print("═" * 51)
+            return False
+        print(f"✓ Precios actualizados: último estado {last_state_date}, último precio {last_price_date}")
+
+    # Check 4: idempotencia
     if force:
         print("⚠  --force activo: saltando check de idempotencia")
     else:

@@ -35,6 +35,18 @@ from monitoring.checks import run_pre_trade_checks, run_health_checks
 BEST_PARAMS_PATH = _PROJECT_ROOT / "results" / "backtesting" / "best_params.json"
 
 
+def is_rebalance_day(prices) -> bool:
+    """
+    Es día de rebalanceo si el último día del dataset cambió de mes respecto al anteúltimo.
+    Para el primer día del dataset, siempre rebalancear (no hay anteúltimo).
+    """
+    if len(prices) < 2:
+        return True
+    last_date = prices.index[-1]
+    prev_date = prices.index[-2]
+    return (last_date.year, last_date.month) != (prev_date.year, prev_date.month)
+
+
 def run_paper_trading(force: bool = False):
     print("=== RMT Stat-Arb — Paper Trading ===")
 
@@ -60,38 +72,49 @@ def run_paper_trading(force: bool = False):
         best_params = json.load(f)
     print(f"[*] Parámetros desde {BEST_PARAMS_PATH.name}: {best_params}")
 
-    # ── 4. Preview de pesos ───────────────────────────────────────────────────
+    # ── 4. Detectar día de rebalanceo ─────────────────────────────────────────
     strategy = RMTStrategy(**best_params)
     engine   = PaperEngine(strategy)
 
-    target_weights, _ = engine.compute_target_weights(prices)
+    rebalance_day = is_rebalance_day(prices)
 
-    longs  = {t: w for t, w in target_weights.items() if w >  0.001}
-    shorts = {t: w for t, w in target_weights.items() if w < -0.001}
+    if rebalance_day:
+        print("\n[*] Hoy es día de rebalanceo (cambio de mes detectado).")
 
-    print("\n--- PESOS OBJETIVO ---")
-    if longs:
-        print("  Longs  (" + str(len(longs)) + "): " +
-              ", ".join(f"{t} {w:+.1%}" for t, w in sorted(longs.items())))
+        # ── Preview de pesos ──────────────────────────────────────────────────
+        target_weights, _ = engine.compute_target_weights(prices)
+
+        longs  = {t: w for t, w in target_weights.items() if w >  0.001}
+        shorts = {t: w for t, w in target_weights.items() if w < -0.001}
+
+        print("\n--- PESOS OBJETIVO ---")
+        if longs:
+            print("  Longs  (" + str(len(longs)) + "): " +
+                  ", ".join(f"{t} {w:+.1%}" for t, w in sorted(longs.items())))
+        else:
+            print("  Longs  (0): —")
+        if shorts:
+            print("  Shorts (" + str(len(shorts)) + "): " +
+                  ", ".join(f"{t} {w:+.1%}" for t, w in sorted(shorts.items())))
+        else:
+            print("  Shorts (0): —")
+        print(f"  Net exposure : {sum(target_weights.values()):+.3f}")
+        print(f"  Gross        : {sum(abs(w) for w in target_weights.values()):.3f}")
+        print(f"  Posiciones   : {len(longs) + len(shorts)}")
+
+        # ── Confirmación humana ───────────────────────────────────────────────
+        input("\n[?] ENTER para ejecutar las órdenes en IBKR, CTRL+C para abortar...")
+
+        # ── Ejecución ─────────────────────────────────────────────────────────
+        engine.execute(prices)
+
+        # ── Post-trade ────────────────────────────────────────────────────────
+        run_health_checks()
+
     else:
-        print("  Longs  (0): —")
-    if shorts:
-        print("  Shorts (" + str(len(shorts)) + "): " +
-              ", ".join(f"{t} {w:+.1%}" for t, w in sorted(shorts.items())))
-    else:
-        print("  Shorts (0): —")
-    print(f"  Net exposure : {sum(target_weights.values()):+.3f}")
-    print(f"  Gross        : {sum(abs(w) for w in target_weights.values()):.3f}")
-    print(f"  Posiciones   : {len(longs) + len(shorts)}")
-
-    # ── 5. Confirmación ───────────────────────────────────────────────────────
-    input("\n[?] ENTER para ejecutar las órdenes en IBKR, CTRL+C para abortar...")
-
-    # ── 6. Ejecución ──────────────────────────────────────────────────────────
-    engine.execute(prices)
-
-    # ── 7. Post-trade ─────────────────────────────────────────────────────────
-    run_health_checks()
+        print("\n[*] Hoy NO es día de rebalanceo. Actualizando NAV sin tocar IBKR…")
+        engine.update_no_rebalance(prices)
+        print("[*] Para consultar el estado: python -m rmt_stat_arb status")
 
 
 if __name__ == "__main__":

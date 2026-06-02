@@ -194,6 +194,95 @@ class PaperEngine:
         )
         return target_weights, current_positions
 
+    # ── Update sin rebalanceo ─────────────────────────────────────────────────
+
+    def update_no_rebalance(self, prices_hist) -> dict | None:
+        """
+        Actualiza NAV con marking-to-market sin tocar IBKR.
+        Hereda target_weights del último rebalanceo, recalcula actual_weights por drift,
+        calcula zscores frescos. Appendea fila al daily_state.
+        Retorna dict con resumen o None si falla.
+        """
+        if not _STATE_PATH.exists():
+            print("[PaperEngine] ERROR: no hay estado previo. Correr un rebalanceo primero.")
+            return None
+
+        df = pd.read_parquet(_STATE_PATH)
+        if df.empty:
+            print("[PaperEngine] ERROR: daily_state vacío. Correr un rebalanceo primero.")
+            return None
+
+        last = df.iloc[-1]
+
+        # NAV con marking-to-market (reusa el helper existente)
+        estimated_nav, month_start_nav = self._estimate_nav(prices_hist)
+        nav_ayer = float(last["estimated_nav"])
+        daily_return = (estimated_nav / nav_ayer) - 1.0
+
+        # Heredar target_weights del último rebalanceo
+        last_rebal_target_weights = self._get_last_rebalance_target_weights(df)
+
+        # Calcular actual_weights por drift
+        weights_ayer = json.loads(last["actual_weights"])
+        daily_rets   = prices_hist.pct_change().iloc[-1]
+        actual_weights = {}
+        for ticker, w_ayer in weights_ayer.items():
+            ret_t = float(daily_rets[ticker]) if ticker in daily_rets.index and not pd.isna(daily_rets[ticker]) else 0.0
+            denom = 1.0 + daily_return if (1.0 + daily_return) != 0 else 1.0
+            actual_weights[ticker] = w_ayer * (1 + ret_t) / denom
+
+        # Z-scores frescos: llamar a la estrategia solo para diagnósticos
+        current_positions = {
+            t: int(np.sign(w))
+            for t, w in actual_weights.items()
+            if abs(w) > 1e-6
+        }
+        _, diagnostics = self.strategy.get_weights(
+            prices_hist,
+            current_positions=current_positions,
+            return_diagnostics=True,
+        )
+        zscores = diagnostics.get("zscores", {})
+
+        # Persistir
+        self._save_daily_state(
+            estimated_nav   = estimated_nav,
+            month_start_nav = month_start_nav,
+            target_weights  = last_rebal_target_weights,
+            actual_weights  = actual_weights,
+            zscores         = zscores,
+        )
+
+        # Imprimir resumen
+        print("\n" + "═" * 51)
+        print("  STATUS UPDATE — no es día de rebalanceo")
+        print("═" * 51)
+        print(f"  NAV ayer       : ${nav_ayer:,.2f}")
+        print(f"  NAV hoy        : ${estimated_nav:,.2f}")
+        print(f"  Retorno diario : {daily_return:+.4%}")
+        print(f"  Drawdown mes   : {(estimated_nav/month_start_nav - 1):+.2%}")
+        print("═" * 51 + "\n")
+
+        return {
+            "nav_hoy":        estimated_nav,
+            "nav_ayer":       nav_ayer,
+            "daily_return":   daily_return,
+            "target_weights": last_rebal_target_weights,
+            "actual_weights": actual_weights,
+        }
+
+    def _get_last_rebalance_target_weights(self, df) -> dict:
+        """
+        Devuelve los target_weights del primer rebalanceo del mes actual.
+        Si no hay filas del mes actual, devuelve los de la última fila.
+        """
+        last_date     = df.iloc[-1]["date_only"]
+        current_month = last_date[:7]   # 'YYYY-MM'
+        month_rows    = df[df["date_only"].str.startswith(current_month)]
+        if month_rows.empty:
+            return json.loads(df.iloc[-1]["target_weights"])
+        return json.loads(month_rows.iloc[0]["target_weights"])
+
     # ── Persistencia ──────────────────────────────────────────────────────────
 
     def _save_daily_state(
